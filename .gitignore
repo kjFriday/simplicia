@@ -4,3 +4,6 @@ Cargo.toml
 /target
 /target
 /target/flycheck0
+/target
+/target/debug
+*.bin
