@@ -49,7 +49,8 @@ pub(super) const TEXT_SCALE_MAX: u32 = 4;
 pub(super) struct Settings {
 	/// Screen pixels per font pixel; 1 draws the 8x8 font at its real size
 	pub(super) text_scale: u32,
-	/// Whether the 3D view is drawn as text, or shown as it renders
+	/// ASCII mode: the 3D view drawn as text; off shows it textured, as it
+	/// renders. F2 toggles it anywhere.
 	pub(super) text_filter: bool,
 	/// One key per action, in `Bind::ALL` order
 	keys: [KeyCode; 5],
@@ -57,7 +58,7 @@ pub(super) struct Settings {
 
 impl Default for Settings {
 	fn default() -> Self {
-		Self { text_scale: 1, text_filter: true, keys: Bind::ALL.map(Bind::default_key) }
+		Self { text_scale: 4, text_filter: false, keys: Bind::ALL.map(Bind::default_key) }
 	}
 }
 
@@ -261,7 +262,7 @@ fn line(item: Item, screen: Screen, settings: &Settings) -> String {
 		Item::TextOptions => "Text".into(),
 		Item::KeyBinds => "Key Binds".into(),
 		Item::TextScale => format!("Text Size   < {}x >", settings.text_scale),
-		Item::TextFilter => format!("Text Filter < {} >", if settings.text_filter { "On" } else { "Off" }),
+		Item::TextFilter => format!("ASCII Mode  < {} >", if settings.text_filter { "On" } else { "Off" }),
 		Item::Rebind(bind) => {
 			let waiting = matches!(screen, Screen::KeyBinds { selected, waiting: true, .. } if Bind::ALL[selected] == bind);
 			let key = if waiting { "press a key".into() } else { key_name(settings.key(bind)) };
@@ -298,7 +299,7 @@ pub(super) fn draw(screen: Screen, settings: &Settings, buffer: &mut Framebuffer
 	};
 	let hint = match screen {
 		Screen::KeyBinds { waiting: true, .. } => "Press the new key",
-		Screen::TextOptions { .. } => "A/D change  Esc back",
+		Screen::TextOptions { .. } => "A/D change  F2 ASCII  Esc back",
 		Screen::MainMenu { .. } => "W/S move  Enter select",
 		_ => "Enter select  Esc back",
 	};
@@ -387,8 +388,9 @@ mod tests {
 		press(&mut screen, &mut settings, KeyCode::ArrowLeft);
 		assert_eq!(settings.text_scale, TEXT_SCALE_MAX - 1);
 		press(&mut screen, &mut settings, KeyCode::ArrowDown);
+		let before = settings.text_filter;
 		press(&mut screen, &mut settings, KeyCode::Enter);
-		assert!(!settings.text_filter);
+		assert_eq!(settings.text_filter, !before);
 	}
 
 	#[test]

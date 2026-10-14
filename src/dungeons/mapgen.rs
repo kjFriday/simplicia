@@ -73,6 +73,32 @@ impl Room {
 	}
 }
 
+/// Share of corridors that run diagonally instead of as an L.
+const DIAGONAL_CHANCE: f64 = 0.35;
+
+/// Carves a corridor along the straight line from `a` to `b`, as a staircase
+/// of single steps east/west or north/south, so every tile is reachable
+/// without moving diagonally.
+fn carve_diagonal(map: &mut MapGrid, a: (i32, i32), b: (i32, i32)) {
+	let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+	let (sx, sy) = (dx.signum(), dy.signum());
+	let (nx, ny) = (dx.abs(), dy.abs());
+	let (mut x, mut y) = a;
+	let (mut ix, mut iy) = (0, 0);
+	map.set_floor(x, y);
+	while ix < nx || iy < ny {
+		// Step along whichever axis is further behind the line
+		if (1 + 2 * ix) * ny < (1 + 2 * iy) * nx {
+			x += sx;
+			ix += 1;
+		} else {
+			y += sy;
+			iy += 1;
+		}
+		map.set_floor(x, y);
+	}
+}
+
 /// Panics if `room_max` doesn't fit inside the map with a 1-tile border.
 pub fn generate_dungeon(
 	rng: &mut impl Rng,
@@ -119,12 +145,14 @@ pub fn generate_dungeon_with_rooms(
 			}
 		}
 
-		// Connect with L-shaped corridor to previous room
+		// Connect to the previous room: a diagonal corridor or an L
 		if let Some(prev) = rooms.last() {
 			let (prev_x, prev_y) = prev.center();
 			let (curr_x, curr_y) = new_room.center();
 
-			if rng.random_bool(0.5) {
+			if rng.random_bool(DIAGONAL_CHANCE) {
+				carve_diagonal(&mut dungeon, (prev_x, prev_y), (curr_x, curr_y));
+			} else if rng.random_bool(0.5) {
 				// Horizontal then vertical
 				for cx in prev_x.min(curr_x)..=prev_x.max(curr_x) {
 					dungeon.set_floor(cx, prev_y);
@@ -281,6 +309,24 @@ mod tests {
 		map.set_floor(1, 1);
 		assert!(!map.is_wall(1, 1));
 		assert_eq!(map.render(), "###\n#.#\n###\n");
+	}
+
+	#[test]
+	fn diagonal_corridors_are_walkable_without_diagonal_steps() {
+		let mut map = MapGrid::new(12, 8, 1);
+		carve_diagonal(&mut map, (1, 1), (9, 6));
+		assert!(!map.is_wall(1, 1) && !map.is_wall(9, 6));
+		// Exactly the tiles of a 4-connected path: 8 + 5 steps after the start
+		assert_eq!(map.grid.iter().filter(|w| !**w).count(), 14);
+		// Every floor tile but the ends has an open orthogonal neighbor on each side of the walk
+		for x in 0..12 {
+			for y in 0..8 {
+				if !map.is_wall(x, y) && (x, y) != (1, 1) && (x, y) != (9, 6) {
+					let n = [(0, 1), (0, -1), (1, 0), (-1, 0)].iter().filter(|(dx, dy)| !map.is_wall(x + dx, y + dy)).count();
+					assert_eq!(n, 2, "({x}, {y}) is a dead end or a branch");
+				}
+			}
+		}
 	}
 
 	#[test]

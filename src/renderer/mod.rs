@@ -1,4 +1,5 @@
-﻿mod crawler;
+mod crawler;
+mod editor;
 mod font;
 mod menu;
 mod mesh;
@@ -84,6 +85,8 @@ pub struct Renderer {
 	light_dir: Vec3,
 	/// Main menu, playing, or paused
 	screen: menu::Screen,
+	/// What the options menus set: text size, text filter, key binds
+	settings: menu::Settings,
 	framebuffer: Framebuffer,
 	glyphs: GlyphSheet,
 }
@@ -99,6 +102,7 @@ impl Renderer {
 			//give sun angle
 			light_dir: Vec3::new(0.5, -1.0, -0.5).normalize(),
 			screen: menu::Screen::MainMenu { selected: 0 },
+			settings: menu::Settings::default(),
 			framebuffer: Framebuffer::new(0, 0),
 			glyphs: GlyphSheet::load()?,
 		})
@@ -152,10 +156,11 @@ impl Renderer {
 			self.framebuffer = Framebuffer::new(cols, rows);
 		}
 		self.framebuffer.clear();
-		if !matches!(self.screen, menu::Screen::MainMenu { .. }) {
+		// Menus opened from the main menu cover the whole screen anyway
+		if self.screen == menu::Screen::Playing || matches!(self.screen, menu::Screen::Paused { .. }) {
 			minimap::draw(&self.levels[self.depth], &mut self.framebuffer);
 		}
-		menu::draw(self.screen, &mut self.framebuffer);
+		menu::draw(self.screen, &self.settings, &mut self.framebuffer);
 	}
 }
 

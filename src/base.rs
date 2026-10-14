@@ -27,7 +27,7 @@ pub fn main() -> std::io::Result<()>{
 				.set(ImagePlugin::default_nearest()),
 		)
 		.insert_resource(renderer)
-		.add_plugins(renderer::RendererPlugin)
+		.add_plugins(renderer::wRendererPlugin)
 		.run();
 
 	Ok(())

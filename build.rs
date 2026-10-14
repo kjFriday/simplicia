@@ -28,7 +28,8 @@ fn collect(root: &Path, dir: &Path, files: &mut Vec<(String, PathBuf)>) {
 		let path = entry.unwrap().path();
 		if path.is_dir() {
 			collect(root, &path, files);
-		} else if path.is_file() {
+		} else if path.is_file() && !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("fbx")) {
+			// .fbx sources can't be loaded; tools/fbx2glb.py turns them into .glb
 			let name = path
 				.strip_prefix(root)
 				.unwrap()
