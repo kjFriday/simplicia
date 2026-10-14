@@ -829,6 +829,45 @@ mod tests {
 	}
 
 	#[test]
+	fn walking_slides_along_walls_and_tracks_the_tile() {
+		let mut world = World::generate(&mut StdRng::seed_from_u64(4), 0).unwrap();
+		world.enemies.clear();
+		for _ in 0..200 {
+			world.walk(1.0, 0.3, 0.05);
+			assert!(!Player::blocked(&world.map, world.player.pos), "walked into a wall");
+			assert_eq!(world.player.x, (world.player.pos.x / TILE).floor() as i32);
+		}
+	}
+
+	#[test]
+	fn combat_snaps_to_tiles_and_bumping_an_enemy_attacks_it() {
+		let mut world = World::generate(&mut StdRng::seed_from_u64(6), 0).unwrap();
+		world.enemies.clear();
+		// An enemy two tiles ahead of the player, along open floor
+		let facing = open_facing(&world.map, (world.player.x, world.player.y, 0));
+		world.player.facing = facing;
+		world.player.pos += Vec3::new(0.7, 0.0, 0.3);
+		let (dx, dy) = DIRECTIONS[facing];
+		world.enemies.push(Enemy { id: 0, x: world.player.x + 2 * dx, y: world.player.y + 2 * dy, hp: ENEMY_HP });
+		world.update_combat();
+		assert!(world.combat);
+		assert_eq!(world.player.pos, tile_center(world.player.x, world.player.y));
+
+		// Waiting a turn (stepping back) lets it close in, then bump it until it dies
+		world.act(Action::Back);
+		for _ in 0..10 {
+			if world.enemies.is_empty() {
+				break;
+			}
+			world.player.facing = facing;
+			world.act(Action::Forward);
+		}
+		assert!(world.enemies.is_empty(), "the slime should be dead");
+		assert!(world.hp < PLAYER_HP, "it should have hit back");
+		assert!(!world.combat);
+	}
+
+	#[test]
 	fn top_level_has_no_way_up_and_turning_never_triggers_stairs() {
 		let mut world = World::generate(&mut StdRng::seed_from_u64(5), 0).unwrap();
 		assert!(world.stairs_up.is_none());
@@ -845,7 +884,7 @@ mod tests {
 		});
 
 		let mut fb = Framebuffer::new(120, 40);
-		super::super::minimap::draw(&world, &mut fb);
+		super::super::minimap::draw(&world, &mut fb, false);
 		let row0: String = fb.color_buffer[..120].iter().map(|c| c.ch).collect();
 		assert!(row0.ends_with('┐') && row0.contains("Depth 1"), "{row0}");
 		let arrow = ['▲', '►', '▼', '◄'][world.player.facing];
