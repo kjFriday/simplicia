@@ -1,0 +1,10 @@
+C:\Users\kfman\Desktop\rpg_game\target\debug\deps\toml_writer-20c62cbdd6cc3bf0.d: C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_writer-1.1.3+spec-1.1.0\src\lib.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_writer-1.1.3+spec-1.1.0\src\integer.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_writer-1.1.3+spec-1.1.0\src\key.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_writer-1.1.3+spec-1.1.0\src\string.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_writer-1.1.3+spec-1.1.0\src\value.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_writer-1.1.3+spec-1.1.0\src\write.rs
+
+C:\Users\kfman\Desktop\rpg_game\target\debug\deps\libtoml_writer-20c62cbdd6cc3bf0.rmeta: C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_writer-1.1.3+spec-1.1.0\src\lib.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_writer-1.1.3+spec-1.1.0\src\integer.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_writer-1.1.3+spec-1.1.0\src\key.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_writer-1.1.3+spec-1.1.0\src\string.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_writer-1.1.3+spec-1.1.0\src\value.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_writer-1.1.3+spec-1.1.0\src\write.rs
+
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_writer-1.1.3+spec-1.1.0\src\lib.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_writer-1.1.3+spec-1.1.0\src\integer.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_writer-1.1.3+spec-1.1.0\src\key.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_writer-1.1.3+spec-1.1.0\src\string.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_writer-1.1.3+spec-1.1.0\src\value.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_writer-1.1.3+spec-1.1.0\src\write.rs:

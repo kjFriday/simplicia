@@ -1,0 +1,9 @@
+C:\Users\kfman\Desktop\rpg_game\target\debug\deps\bevy_sprite-75eb4d6a3ec780e6.d: C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_sprite-0.20.0\src\lib.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_sprite-0.20.0\src\sprite.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_sprite-0.20.0\src\texture_slice\mod.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_sprite-0.20.0\src\texture_slice\border_rect.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_sprite-0.20.0\src\texture_slice\slicer.rs
+
+C:\Users\kfman\Desktop\rpg_game\target\debug\deps\libbevy_sprite-75eb4d6a3ec780e6.rmeta: C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_sprite-0.20.0\src\lib.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_sprite-0.20.0\src\sprite.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_sprite-0.20.0\src\texture_slice\mod.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_sprite-0.20.0\src\texture_slice\border_rect.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_sprite-0.20.0\src\texture_slice\slicer.rs
+
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_sprite-0.20.0\src\lib.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_sprite-0.20.0\src\sprite.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_sprite-0.20.0\src\texture_slice\mod.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_sprite-0.20.0\src\texture_slice\border_rect.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_sprite-0.20.0\src\texture_slice\slicer.rs:

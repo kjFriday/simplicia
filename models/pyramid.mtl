@@ -1,0 +1,6 @@
+# Kd = diffuse color (r g b, 0.0 to 1.0)
+newmtl sandstone
+Kd 0.93 0.76 0.45
+
+newmtl base
+Kd 0.45 0.30 0.18

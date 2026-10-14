@@ -1,0 +1,10 @@
+C:\Users\kfman\Desktop\rpg_game\target\debug\deps\crc32fast-7b1b1149562d1cbc.d: C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crc32fast-1.5.2\src\lib.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crc32fast-1.5.2\src\baseline.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crc32fast-1.5.2\src\combine.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crc32fast-1.5.2\src\specialized\mod.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crc32fast-1.5.2\src\table.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crc32fast-1.5.2\src\specialized\pclmulqdq.rs
+
+C:\Users\kfman\Desktop\rpg_game\target\debug\deps\libcrc32fast-7b1b1149562d1cbc.rmeta: C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crc32fast-1.5.2\src\lib.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crc32fast-1.5.2\src\baseline.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crc32fast-1.5.2\src\combine.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crc32fast-1.5.2\src\specialized\mod.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crc32fast-1.5.2\src\table.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crc32fast-1.5.2\src\specialized\pclmulqdq.rs
+
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crc32fast-1.5.2\src\lib.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crc32fast-1.5.2\src\baseline.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crc32fast-1.5.2\src\combine.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crc32fast-1.5.2\src\specialized\mod.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crc32fast-1.5.2\src\table.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crc32fast-1.5.2\src\specialized\pclmulqdq.rs:

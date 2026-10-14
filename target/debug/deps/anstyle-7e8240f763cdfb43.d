@@ -1,0 +1,10 @@
+C:\Users\kfman\Desktop\rpg_game\target\debug\deps\anstyle-7e8240f763cdfb43.d: C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-1.0.14\src\lib.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-1.0.14\src\macros.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-1.0.14\src\color.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-1.0.14\src\effect.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-1.0.14\src\reset.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-1.0.14\src\style.rs
+
+C:\Users\kfman\Desktop\rpg_game\target\debug\deps\libanstyle-7e8240f763cdfb43.rmeta: C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-1.0.14\src\lib.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-1.0.14\src\macros.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-1.0.14\src\color.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-1.0.14\src\effect.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-1.0.14\src\reset.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-1.0.14\src\style.rs
+
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-1.0.14\src\lib.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-1.0.14\src\macros.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-1.0.14\src\color.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-1.0.14\src\effect.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-1.0.14\src\reset.rs:
+C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-1.0.14\src\style.rs:
