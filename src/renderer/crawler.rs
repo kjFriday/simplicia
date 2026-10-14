@@ -22,6 +22,7 @@ const EYE_HEIGHT: f32 = 2.0;
 /// Map size and room settings handed to the room & corridor generator.
 const MAP_WIDTH: usize = 48;
 const MAP_HEIGHT: usize = 32;
+const MAX_DEPTH: usize = 4;
 const MAX_ROOMS: usize = 12;
 const ROOM_MIN: i32 = 4;
 const ROOM_MAX: i32 = 8;
@@ -48,6 +49,7 @@ const DIRECTIONS: [(i32, i32); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
 pub(super) struct Player {
 	pub(super) x: i32,
 	pub(super) y: i32,
+	pub(super) z: i32,
 	/// Index into DIRECTIONS: 0 north, 1 east, 2 south, 3 west
 	facing: usize,
 	/// Mouselook, in radians, on top of `facing`. Yaw stays within ±45°: past
@@ -60,8 +62,8 @@ pub(super) struct Player {
 const MAX_PITCH: f32 = 80.0 * std::f32::consts::PI / 180.0;
 
 impl Player {
-	fn new(x: i32, y: i32) -> Self {
-		Self { x, y, facing: 0, look_yaw: 0.0, look_pitch: 0.0 }
+	fn new(x: i32, y: i32, z: i32) -> Self {
+		Self { x, y, z, facing: 0, look_yaw: 0.0, look_pitch: 0.0 }
 	}
 
 	/// Turns the view by mouse movement, in radians. Positive yaw turns right,
@@ -140,9 +142,9 @@ pub(super) struct World {
 	/// 0 is the top level; each staircase down adds one
 	pub(super) depth: usize,
 	/// Stepping here takes you one level deeper
-	pub(super) stairs_down: (i32, i32),
+	pub(super) stairs_down: (i32, i32, i32),
 	/// Stepping here takes you back up; none on the top level
-	pub(super) stairs_up: Option<(i32, i32)>,
+	pub(super) stairs_up: Option<(i32, i32, i32)>,
 	/// Tiles the minimap shows, indexed [x * height + y]
 	seen: Vec<bool>,
 }
@@ -162,17 +164,17 @@ impl World {
 	pub(super) fn has_seen(&self, x: i32, y: i32) -> bool {
 		x >= 0
 			&& y >= 0
-			&& (x as usize) < self.map.width
-			&& (y as usize) < self.map.height
-			&& self.seen[x as usize * self.map.height + y as usize]
+			&& (x as usize) < self.map.x as usize
+			&& (y as usize) < self.map.y as usize
+			&& self.seen[x as usize * self.map.y as usize + y as usize]
 	}
 
 	fn reveal_around_player(&mut self) {
 		let (px, py) = (self.player.x, self.player.y);
 		for x in px - REVEAL_RADIUS..=px + REVEAL_RADIUS {
 			for y in py - REVEAL_RADIUS..=py + REVEAL_RADIUS {
-				if x >= 0 && y >= 0 && (x as usize) < self.map.width && (y as usize) < self.map.height {
-					self.seen[x as usize * self.map.height + y as usize] = true;
+				if x >= 0 && y >= 0 && (x as usize) < self.map.x && (y as usize) < self.map.y {
+					self.seen[x as usize * self.map.y + y as usize] = true;
 				}
 			}
 		}
@@ -189,9 +191,9 @@ impl World {
 			return None;
 		}
 		self.reveal_around_player();
-		Some(if here == self.stairs_down {
+		Some(if here == (self.stairs_down.0, self.stairs_down.1) {
 			Arrival::StairsDown
-		} else if Some(here) == self.stairs_up {
+		} else if Some(here) == self.stairs_up.map(|s| (s.0, s.1)) {
 			Arrival::StairsUp
 		} else {
 			Arrival::Floor
@@ -199,16 +201,24 @@ impl World {
 	}
 
 	/// Puts the player on `tile`, facing open floor, and uncovers around them.
-	pub(super) fn place_player(&mut self, tile: (i32, i32)) {
-		self.player.x = tile.0;
-		self.player.y = tile.1;
-		self.player.facing = open_facing(&self.map, tile);
+	/// Puts the player on the first open tile next to `tile` (a staircase or
+	/// start), facing away from it, so they aren't standing inside the stairs.
+	pub(super) fn place_player(&mut self, tile: (i32, i32, i32)) {
+		let facing = open_facing(&self.map, tile);
+		let (dx, dy) = DIRECTIONS[facing];
+		// open_facing falls back to north when boxed in; stay put then
+		let step = if self.map.is_wall(tile.0 + dx, tile.1 + dy) { (0, 0) } else { (dx, dy) };
+		self.player.x = tile.0 + step.0;
+		self.player.y = tile.1 + step.1;
+		self.player.z = tile.2;
+
+		self.player.facing = facing;
 		self.reveal_around_player();
 	}
 }
 
 /// The first direction from `tile` that isn't a wall, so the view isn't a wall.
-fn open_facing(map: &MapGrid, tile: (i32, i32)) -> usize {
+fn open_facing(map: &MapGrid, tile: (i32, i32, i32)) -> usize {
 	(0..4)
 		.find(|&f| {
 			let (dx, dy) = DIRECTIONS[f];
@@ -254,7 +264,7 @@ impl World {
 	/// Builds a level. The player starts in the first room, on the up staircase
 	/// when `depth` > 0; the down staircase is in the last room.
 	pub(super) fn generate(rng: &mut impl Rng, depth: usize) -> Result<Self, String> {
-		let (map, rooms) = generate_dungeon_with_rooms(rng, MAP_WIDTH, MAP_HEIGHT, MAX_ROOMS, ROOM_MIN, ROOM_MAX);
+		let (map, rooms) = generate_dungeon_with_rooms(rng, MAP_WIDTH, MAP_HEIGHT, MAX_DEPTH, MAX_ROOMS, ROOM_MIN, ROOM_MAX);
 		if rooms.len() < 2 {
 			return Err("the generator made fewer than 2 rooms, so there's nowhere for the stairs".into());
 		}
@@ -350,18 +360,20 @@ impl World {
 			}
 		}
 
-		let seen = vec![false; map.width * map.height];
+		// Tiles carry the level as z
+		let z = depth as i32;
+		let seen = vec![false; map.x * map.y];
 		let mut world = Self {
 			map,
-			player: Player::new(start.0, start.1),
+			player: Player::new(start.0, start.1, z),
 			meshes,
 			objects,
 			depth,
-			stairs_down,
-			stairs_up,
+			stairs_down: (stairs_down.0, stairs_down.1, z),
+			stairs_up: stairs_up.map(|(x, y)| (x, y, z)),
 			seen,
 		};
-		world.place_player(start);
+		world.place_player((start.0, start.1, z));
 		Ok(world)
 	}
 }
@@ -402,7 +414,7 @@ mod tests {
 
 	#[test]
 	fn mouselook_turns_facing_past_45_degrees_and_clamps_pitch() {
-		let mut player = Player::new(0, 0);
+		let mut player = Player::new(0, 0, 0);
 		player.look(50f32.to_radians(), 0.0);
 		assert_eq!(player.facing(), 1);
 		assert!((player.look_yaw - (-40f32).to_radians()).abs() < 1e-4);
@@ -414,7 +426,8 @@ mod tests {
 	}
 
 	/// Stands the player on a floor tile next to `target`, facing it.
-	fn stand_next_to(world: &mut World, target: (i32, i32)) {
+	fn stand_next_to(world: &mut World, target: (i32, i32, i32)) {
+		let target = (target.0, target.1);
 		for (facing, &(dx, dy)) in DIRECTIONS.iter().enumerate() {
 			let from = (target.0 - dx, target.1 - dy);
 			if !world.map.is_wall(from.0, from.1) && from != target {

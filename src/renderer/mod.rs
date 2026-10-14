@@ -11,7 +11,7 @@ use font::GlyphSheet;
 pub use window::RendererPlugin;
 
 use bevy::ecs::resource::Resource;
-use glam::{Mat4, Vec3, Vec4};
+use glam::{Mat4, Vec2, Vec3, Vec4};
 
 /// Height of a character cell divided by its width. The Dungeon Mode font is 8x8.
 const CELL_ASPECT: f32 = 1.0;
@@ -21,8 +21,31 @@ const ASCII_RAMP: &[char] = &['.', ':', '-', '=', '+', '*', '#', '%', '@'];
 #[derive(Clone, Copy)]
 struct Vertex {
 	pos: Vec3,
-	/// RGB, 0.0 to 1.0
+	/// RGB, 0.0 to 1.0. Multiplies the texture when there is one.
 	color: Vec3,
+	/// Texture coordinates; meaningless without a texture
+	uv: Vec2,
+	/// Index into the mesh's `textures`, or `NO_TEXTURE`
+	tex: u32,
+}
+
+const NO_TEXTURE: u32 = u32::MAX;
+
+/// An RGBA8 image a mesh is painted with.
+struct Texture {
+	width: u32,
+	height: u32,
+	rgba: Vec<u8>,
+}
+
+impl Texture {
+	/// Nearest pixel at `uv`, wrapping around like glTF's default sampler.
+	fn sample(&self, uv: Vec2) -> Vec3 {
+		let x = (uv.x.rem_euclid(1.0) * self.width as f32) as u32 % self.width;
+		let y = (uv.y.rem_euclid(1.0) * self.height as f32) as u32 % self.height;
+		let i = (y * self.width + x) as usize * 4;
+		Vec3::new(self.rgba[i] as f32, self.rgba[i + 1] as f32, self.rgba[i + 2] as f32) / 255.0
+	}
 }
 
 /// One character cell: the character and its RGB color.
@@ -33,13 +56,18 @@ struct Cell {
 	/// HUD text like the minimap: drawn on solid black. Other cells are drawn
 	/// over the 3D view with a see-through background.
 	ui: bool,
+	/// How lit the surface is, 0 to 255. Over the 3D view, lit surfaces show
+	/// the 3D render and dark ones show the text; see `GlyphSheet::draw`.
+	light: u8,
 }
 
-const EMPTY_CELL: Cell = Cell { ch: ' ', rgb: [0, 0, 0], ui: false };
+/// Nothing drawn: full light, so the 3D view (or sky) shows through.
+const EMPTY_CELL: Cell = Cell { ch: ' ', rgb: [0, 0, 0], ui: false, light: 255 };
 
 struct Mesh {
 	vertices: Vec<Vertex>,
 	indices: Vec<[usize; 3]>,
+	textures: Vec<Texture>,
 }
 
 
@@ -185,14 +213,36 @@ fn edge_function(a: Vec3, b: Vec3, c: Vec3) -> f32 {
 	(c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x)
 }
 
+/// A triangle corner on its way to the screen.
+#[derive(Clone, Copy)]
+struct Corner {
+	clip: Vec4,
+	color: Vec3,
+	uv: Vec2,
+}
+
+impl Corner {
+	fn lerp(self, other: Corner, t: f32) -> Corner {
+		Corner {
+			clip: self.clip.lerp(other.clip, t),
+			color: self.color.lerp(other.color, t),
+			uv: self.uv.lerp(other.uv, t),
+		}
+	}
+}
+
+/// `screen` is x, y in cells and z = depth; `inv_w` is 1 / clip w per corner,
+/// used to interpolate texture coordinates with perspective.
 fn rasterize_triangle(
-	v0: Vec3,
-	v1: Vec3,
-	v2: Vec3,
-	colors: [Vec3; 3],
+	screen: [Vec3; 3],
+	inv_w: [f32; 3],
+	corners: [Corner; 3],
+	texture: Option<&Texture>,
 	light_intensity: f32,
 	buffer: &mut Framebuffer,
 ) {
+	let [v0, v1, v2] = screen;
+	let colors = corners.map(|c| c.color);
 	// Bounding box of the triangle in screen space
 	let min_x = v0.x.min(v1.x).min(v2.x).floor().max(0.0) as usize;
 	let max_x = v0.x.max(v1.x).max(v2.x).ceil().min((buffer.width - 1) as f32) as usize;
@@ -224,10 +274,20 @@ fn rasterize_triangle(
 				// Interpolate depth z
 				let depth = w0 * v0.z + w1 * v1.z + w2 * v2.z;
 
-				// Blend the corner colors, then darken by the light like the character does
-				let color = (w0 * colors[0] + w1 * colors[1] + w2 * colors[2]) * light_intensity;
+				// Blend the corner colors, paint with the texture, then darken by
+				// the light like the character does
+				let mut color = w0 * colors[0] + w1 * colors[1] + w2 * colors[2];
+				if let Some(texture) = texture {
+					let (p0, p1, p2) = (w0 * inv_w[0], w1 * inv_w[1], w2 * inv_w[2]);
+					let uv = (p0 * corners[0].uv + p1 * corners[1].uv + p2 * corners[2].uv) / (p0 + p1 + p2);
+					color *= texture.sample(uv);
+				}
+				let color = color * light_intensity;
 				let rgb = (color.clamp(Vec3::ZERO, Vec3::ONE) * 255.0).round();
-				let cell = Cell { ch: char_to_draw, rgb: [rgb.x as u8, rgb.y as u8, rgb.z as u8], ui: false };
+				let cell = Cell { ch: char_to_draw, rgb: [rgb.x as u8, rgb.y as u8, rgb.z as u8],
+					ui: false,
+					light: (light_intensity.clamp(0.0, 1.0) * 255.0) as u8,
+				};
 				buffer.set_pixel(x, y, depth, cell);
 			}
 		}
@@ -259,11 +319,13 @@ fn render_mesh(
 		// Transform to Clip Space
 		let corners = tri.map(|i| {
 			let v = mesh.vertices[i];
-			(mvp * Vec4::from((v.pos, 1.0)), v.color)
+			Corner { clip: mvp * Vec4::from((v.pos, 1.0)), color: v.color, uv: v.uv }
 		});
+		let tex = mesh.vertices[tri[0]].tex;
+		let texture = (tex != NO_TEXTURE).then(|| &mesh.textures[tex as usize]);
 
 		// Skip triangles wholly outside one side of the view; there are a lot of them
-		if outside_frustum(corners.map(|(c, _)| c)) {
+		if outside_frustum(corners.map(|c| c.clip)) {
 			continue;
 		}
 
@@ -285,10 +347,10 @@ fn render_mesh(
 		for i in 1..polygon.len().saturating_sub(1) {
 			let (a, b, c) = (polygon[0], polygon[i], polygon[i + 1]);
 			rasterize_triangle(
-				to_screen(a.0),
-				to_screen(b.0),
-				to_screen(c.0),
-				[a.1, b.1, c.1],
+				[to_screen(a.clip), to_screen(b.clip), to_screen(c.clip)],
+				[1.0 / a.clip.w, 1.0 / b.clip.w, 1.0 / c.clip.w],
+				[a, b, c],
+				texture,
 				intensity,
 				buffer,
 			);
@@ -309,20 +371,19 @@ fn outside_frustum(c: [Vec4; 3]) -> bool {
 }
 
 /// Clips a triangle against the near plane (z >= -w in OpenGL clip space).
-/// Returns 0, 3 or 4 corners, colors interpolated along the cut edges.
-fn clip_near(corners: &[(Vec4, Vec3); 3]) -> Vec<(Vec4, Vec3)> {
+/// Returns 0, 3 or 4 corners, colors and UVs interpolated along the cut edges.
+fn clip_near(corners: &[Corner; 3]) -> Vec<Corner> {
 	let inside = |v: Vec4| v.z + v.w;
 	let mut out = Vec::with_capacity(4);
 	for i in 0..3 {
 		let (a, b) = (corners[i], corners[(i + 1) % 3]);
-		let (da, db) = (inside(a.0), inside(b.0));
+		let (da, db) = (inside(a.clip), inside(b.clip));
 		if da >= 0.0 {
 			out.push(a);
 		}
 		// The edge crosses the plane: add the crossing point
 		if (da >= 0.0) != (db >= 0.0) {
-			let t = da / (da - db);
-			out.push((a.0.lerp(b.0, t), a.1.lerp(b.1, t)));
+			out.push(a.lerp(b, da / (da - db)));
 		}
 	}
 	out

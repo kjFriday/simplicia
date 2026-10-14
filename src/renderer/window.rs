@@ -13,7 +13,7 @@ use super::{Action, Renderer};
 
 /// Screen pixels per font pixel. 1 is the smallest the font can be drawn;
 /// raise it for a chunkier look.
-const PIXEL_SCALE: u32 = 1;
+const PIXEL_SCALE: u32 = 2;
 
 /// Radians the view turns per pixel of mouse movement.
 const MOUSE_SENSITIVITY: f32 = 0.003;
@@ -42,18 +42,20 @@ struct WorldCamera;
 
 /// Turns one of our meshes into a Bevy mesh with vertex colors. Every triangle
 /// gets its own three vertices so its normal is flat, matching the text shading.
-fn to_bevy_mesh(mesh: &super::Mesh) -> Mesh {
+fn to_bevy_mesh(mesh: &super::Mesh, triangles: &[[usize; 3]]) -> Mesh {
 	use bevy::mesh::{Indices, PrimitiveTopology};
-	let mut positions = Vec::with_capacity(mesh.indices.len() * 3);
+	let mut positions = Vec::with_capacity(triangles.len() * 3);
 	let mut normals = Vec::with_capacity(positions.capacity());
 	let mut colors = Vec::with_capacity(positions.capacity());
-	for tri in &mesh.indices {
+	let mut uvs = Vec::with_capacity(positions.capacity());
+	for tri in triangles {
 		let [a, b, c] = tri.map(|i| mesh.vertices[i]);
 		let n = (b.pos - a.pos).cross(c.pos - a.pos).normalize_or_zero();
 		for v in [a, b, c] {
 			positions.push(v.pos.to_array());
 			normals.push(n.to_array());
 			colors.push([v.color.x, v.color.y, v.color.z, 1.0]);
+			uvs.push(v.uv.to_array());
 		}
 	}
 	let count = positions.len() as u32;
@@ -61,7 +63,26 @@ fn to_bevy_mesh(mesh: &super::Mesh) -> Mesh {
 		.with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
 		.with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
 		.with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+		.with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
 		.with_inserted_indices(Indices::U32((0..count).collect()))
+}
+
+/// Uploads one of our textures as a Bevy image: pixelated and repeating.
+fn to_bevy_image(texture: &super::Texture) -> Image {
+	use bevy::image::{ImageAddressMode, ImageSamplerDescriptor};
+	let mut image = Image::new(
+		Extent3d { width: texture.width, height: texture.height, depth_or_array_layers: 1 },
+		TextureDimension::D2,
+		texture.rgba.clone(),
+		TextureFormat::Rgba8UnormSrgb,
+		RenderAssetUsages::RENDER_WORLD,
+	);
+	image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+		address_mode_u: ImageAddressMode::Repeat,
+		address_mode_v: ImageAddressMode::Repeat,
+		..ImageSamplerDescriptor::nearest()
+	});
+	image
 }
 
 /// Respawns the 3D models whenever the player changes level.
@@ -71,6 +92,7 @@ fn sync_scene(
 	mut scene: ResMut<Scene3d>,
 	mut meshes: ResMut<Assets<Mesh>>,
 	mut materials: ResMut<Assets<StandardMaterial>>,
+	mut images: ResMut<Assets<Image>>,
 ) {
 	if scene.depth == Some(renderer.depth) {
 		return;
@@ -81,24 +103,39 @@ fn sync_scene(
 	scene.depth = Some(renderer.depth);
 
 	let world = &renderer.levels[renderer.depth];
-	// Vertex colors carry the model colors; the material just lets light shade them
-	let material = materials.add(StandardMaterial {
-		base_color: Color::WHITE,
-		perceptual_roughness: 1.0,
-		cull_mode: None,
-		double_sided: true,
-		..default()
-	});
-	let handles: Vec<_> = world.meshes.iter().map(|m| meshes.add(to_bevy_mesh(m))).collect();
+	// Vertex colors carry the model colors and tint the texture; the material
+	// just lets light shade them
+	let mut material_for = |texture: Option<Handle<Image>>| {
+		materials.add(StandardMaterial {
+			base_color: Color::WHITE,
+			base_color_texture: texture,
+			perceptual_roughness: 1.0,
+			cull_mode: None,
+			double_sided: true,
+			..default()
+		})
+	};
+	// Each model becomes one Bevy mesh + material per texture it uses
+	let parts: Vec<Vec<(Handle<Mesh>, Handle<StandardMaterial>)>> = world
+		.meshes
+		.iter()
+		.map(|m| {
+			let textures: Vec<_> = m.textures.iter().map(|t| images.add(to_bevy_image(t))).collect();
+			m.split_by_texture()
+				.into_iter()
+				.map(|(tex, tris)| {
+					let texture = textures.get(tex as usize).cloned();
+					(meshes.add(to_bevy_mesh(m, &tris)), material_for(texture))
+				})
+				.collect()
+		})
+		.collect();
 	for object in &world.objects {
-		let entity = commands
-			.spawn((
-				Mesh3d(handles[object.mesh].clone()),
-				MeshMaterial3d(material.clone()),
-				Transform::from_matrix(Mat4::from_cols_array(&object.transform.to_cols_array())),
-			))
-			.id();
-		scene.entities.push(entity);
+		let transform = Transform::from_matrix(Mat4::from_cols_array(&object.transform.to_cols_array()));
+		for (mesh, material) in &parts[object.mesh] {
+			let entity = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), transform)).id();
+			scene.entities.push(entity);
+		}
 	}
 }
 

@@ -6,18 +6,38 @@ use std::path::Path;
 /// Used when a model gives no color at all.
 const DEFAULT_COLOR: Vec3 = Vec3::ONE;
 
+/// Decodes glTF image `index`, which must be embedded in the .glb's binary chunk.
+fn load_texture(gltf: &gltf::Gltf, index: usize, blob: Option<&[u8]>) -> Result<Texture, String> {
+	let image = gltf.images().nth(index).ok_or("texture image missing")?;
+	let bytes = match image.source() {
+		gltf::image::Source::View { view, .. } => {
+			let blob = blob.ok_or("texture data missing")?;
+			blob.get(view.offset()..view.offset() + view.length()).ok_or("texture data out of range")?
+		}
+		gltf::image::Source::Uri { uri, .. } => return Err(format!("external texture {uri:?} isn't supported")),
+	};
+	let rgba = image::load_from_memory(bytes).map_err(|e| format!("texture: {e}"))?.to_rgba8();
+	Ok(Texture { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() })
+}
+
 impl Mesh {
 	/// Creates an empty mesh container.
 	pub(super) fn new() -> Self {
 		Mesh {
 			vertices: Vec::new(),
 			indices: Vec::new(),
+			textures: Vec::new(),
 		}
 	}
 
-	/// Appends a vertex and returns its assigned index.
+	/// Appends an untextured vertex and returns its assigned index.
 	pub(super) fn add_vertex(&mut self, pos: Vec3, color: Vec3) -> usize {
-		self.vertices.push(Vertex { pos, color });
+		self.add_textured_vertex(pos, color, Vec2::ZERO, NO_TEXTURE)
+	}
+
+	/// Appends a vertex painted with `textures[tex]` at `uv`, tinted by `color`.
+	pub(super) fn add_textured_vertex(&mut self, pos: Vec3, color: Vec3, uv: Vec2, tex: u32) -> usize {
+		self.vertices.push(Vertex { pos, color, uv, tex });
 		self.vertices.len() - 1
 	}
 
@@ -29,7 +49,12 @@ impl Mesh {
 	/// Merges another mesh into this mesh, offsetting indices accordingly.
 	pub(super) fn combine(&mut self, other: &Mesh) {
 		let base_index = self.vertices.len();
-		self.vertices.extend(other.vertices.iter().copied());
+		let base_tex = self.textures.len() as u32;
+		self.textures.extend(other.textures.iter().map(|t| Texture { width: t.width, height: t.height, rgba: t.rgba.clone() }));
+		self.vertices.extend(other.vertices.iter().map(|&v| Vertex {
+			tex: if v.tex == NO_TEXTURE { NO_TEXTURE } else { v.tex + base_tex },
+			..v
+		}));
 
 		for tri in &other.indices {
 			self.indices.push([
@@ -121,8 +146,9 @@ impl Mesh {
 
 	/// Parses binary glTF (.glb) with the `gltf` crate. Every triangle mesh in
 	/// the default scene is placed with its node transform and merged into one.
-	/// Colors are the vertex colors (COLOR_0) times the material's base color.
-	/// Textures, animation and skinning are ignored.
+	/// Colors are the vertex colors (COLOR_0) times the material's base color,
+	/// times its texture when it has one embedded in the file.
+	/// Animation and skinning are ignored.
 	pub(super) fn from_gltf(bytes: &[u8]) -> Result<Self, String> {
 		let gltf = gltf::Gltf::from_slice(bytes).map_err(|e| e.to_string())?;
 		let blob = gltf.blob.as_deref();
@@ -133,6 +159,8 @@ impl Mesh {
 		};
 
 		let mut mesh = Self::new();
+		// glTF image index -> index into mesh.textures, so shared images load once
+		let mut texture_slots = std::collections::HashMap::new();
 		let scene = gltf.default_scene().or_else(|| gltf.scenes().next()).ok_or("file has no scene")?;
 		let mut stack: Vec<(gltf::Node, Mat4)> = scene.nodes().map(|n| (n, Mat4::IDENTITY)).collect();
 
@@ -148,13 +176,49 @@ impl Mesh {
 				let reader = primitive.reader(buffer_data);
 				let Some(positions) = reader.read_positions() else { continue };
 
-				let base_color = Vec3::from_slice(&primitive.material().pbr_metallic_roughness().base_color_factor()[..3]);
+				// The base color texture paints the model. Some packs leave the base
+				// color black and put the art in the emissive texture instead; use
+				// that when it's all there is.
+				let material = primitive.material();
+				let pbr = material.pbr_metallic_roughness();
+				let (texture, tint) = match (pbr.base_color_texture(), material.emissive_texture()) {
+					(Some(t), _) => (Some(t), Vec3::from_slice(&pbr.base_color_factor()[..3])),
+					(None, Some(t)) => (Some(t), Vec3::from_array(material.emissive_factor())),
+					(None, None) => (None, Vec3::from_slice(&pbr.base_color_factor()[..3])),
+				};
+				let tex = match &texture {
+					Some(info) => {
+						let image = info.texture().source().index();
+						match texture_slots.get(&image) {
+							Some(&slot) => slot,
+							None => {
+								// A texture we can't read (e.g. a separate file) leaves the model flat-colored
+								let slot = match load_texture(&gltf, image, blob) {
+									Ok(t) => {
+										mesh.textures.push(t);
+										mesh.textures.len() as u32 - 1
+									}
+									Err(_) => NO_TEXTURE,
+								};
+								texture_slots.insert(image, slot);
+								slot
+							}
+						}
+					}
+					None => NO_TEXTURE,
+				};
+				let mut uvs = texture.as_ref().and_then(|t| reader.read_tex_coords(t.tex_coord())).map(|c| c.into_f32());
 				let mut colors = reader.read_colors(0).map(|c| c.into_rgb_f32());
 
 				let base = mesh.vertices.len();
 				for p in positions {
 					let vertex_color = colors.as_mut().and_then(|c| c.next()).map(Vec3::from_array).unwrap_or(Vec3::ONE);
-					mesh.add_vertex(transform.transform_point3(Vec3::from_array(p)), vertex_color * base_color);
+					let uv = uvs.as_mut().and_then(|c| c.next()).map(Vec2::from_array);
+					let pos = transform.transform_point3(Vec3::from_array(p));
+					match uv {
+						Some(uv) => mesh.add_textured_vertex(pos, vertex_color * tint, uv, tex),
+						None => mesh.add_vertex(pos, vertex_color * tint),
+					};
 				}
 				let count = mesh.vertices.len() - base;
 
@@ -172,6 +236,20 @@ impl Mesh {
 			}
 		}
 		Ok(mesh)
+	}
+
+	/// The triangles grouped by the texture they're painted with (by their first
+	/// corner), for renderers that draw one texture at a time.
+	pub(super) fn split_by_texture(&self) -> Vec<(u32, Vec<[usize; 3]>)> {
+		let mut groups: Vec<(u32, Vec<[usize; 3]>)> = Vec::new();
+		for &tri in &self.indices {
+			let tex = self.vertices[tri[0]].tex;
+			match groups.iter_mut().find(|(t, _)| *t == tex) {
+				Some((_, tris)) => tris.push(tri),
+				None => groups.push((tex, vec![tri])),
+			}
+		}
+		groups
 	}
 
 	/// Generates a UV Sphere with configurable rings and segments.
@@ -307,6 +385,15 @@ mod tests {
 		cube.fit_to_radius(1.0);
 		let far = cube.vertices.iter().map(|v| v.pos.length()).fold(0.0, f32::max);
 		assert!((far - 1.0).abs() < 1e-5);
+	}
+
+	#[test]
+	fn wall_model_gets_its_emissive_texture() {
+		let wall = Mesh::load("terrain/canyon/SM_AP_Cube_4m_0.glb").unwrap();
+		assert_eq!(wall.textures.len(), 1);
+		assert!(wall.vertices.iter().all(|v| v.tex == 0));
+		// Not black: the emissive factor tints it, not the black base color
+		assert!(wall.vertices.iter().all(|v| v.color == Vec3::ONE));
 	}
 
 	#[test]

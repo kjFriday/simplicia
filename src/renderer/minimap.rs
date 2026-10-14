@@ -22,7 +22,7 @@ const PLAYER_ARROWS: [char; 4] = ['▲', '►', '▼', '◄'];
 
 fn put(buffer: &mut Framebuffer, x: i32, y: i32, ch: char, rgb: [u8; 3]) {
 	if x >= 0 && y >= 0 && (x as usize) < buffer.width && (y as usize) < buffer.height {
-		buffer.color_buffer[y as usize * buffer.width + x as usize] = Cell { ch, rgb, ui: true };
+		buffer.color_buffer[y as usize * buffer.width + x as usize] = Cell { ch, rgb, ui: true, light: 0 };
 	}
 }
 
@@ -38,16 +38,16 @@ pub(super) fn draw(world: &World, buffer: &mut Framebuffer) {
 	// Never take more than half the screen in either direction
 	let max_w = (buffer.width as i32 / 2 - 2) / CELLS_PER_TILE;
 	let max_h = buffer.height as i32 / 2 - 2;
-	let tiles_w = VIEW_TILES_W.min(max_w).min(world.map.width as i32);
-	let tiles_h = VIEW_TILES_H.min(max_h).min(world.map.height as i32);
+	let tiles_w = VIEW_TILES_W.min(max_w).min(world.map.x as i32);
+	let tiles_h = VIEW_TILES_H.min(max_h).min(world.map.y as i32);
 	if tiles_w < 5 || tiles_h < 3 {
 		return;
 	}
 
 	// Window onto the map, centered on the player but kept inside the map
 	let (px, py) = (world.player.x, world.player.y);
-	let left = (px - tiles_w / 2).clamp(0, world.map.width as i32 - tiles_w);
-	let top = (py - tiles_h / 2).clamp(0, world.map.height as i32 - tiles_h);
+	let left = (px - tiles_w / 2).clamp(0, world.map.x as i32 - tiles_w);
+	let top = (py - tiles_h / 2).clamp(0, world.map.y as i32 - tiles_h);
 
 	// Panel position: flush with the top-right corner, border included
 	let panel_w = tiles_w * CELLS_PER_TILE + 2;
@@ -78,9 +78,9 @@ pub(super) fn draw(world: &World, buffer: &mut Framebuffer) {
 				(PLAYER_ARROWS[world.player.facing()], PLAYER)
 			} else if !world.has_seen(mx, my) {
 				(' ', FLOOR)
-			} else if (mx, my) == world.stairs_down {
+			} else if (mx, my, world.player.z) == world.stairs_down {
 				('>', STAIRS_DOWN)
-			} else if Some((mx, my)) == world.stairs_up {
+			} else if Some((mx, my, world.player.z)) == world.stairs_up {
 				('<', STAIRS_UP)
 			} else if world.map.is_wall(mx, my) {
 				('#', WALL)

@@ -2,6 +2,8 @@
 // 16 x 16 grid of glyphs in IBM code page 437 order. The sheet is built into
 // the executable, like the models.
 use super::{Cell, Framebuffer};
+#[cfg(test)]
+use super::EMPTY_CELL;
 
 const SHEET_PNG: &[u8] = include_bytes!("../../assets/dungeonmode/dungeonmode/bitmap/dungeon-437.png");
 
@@ -73,33 +75,30 @@ impl GlyphSheet {
 	}
 
 	/// Draws the whole framebuffer into `rgba`, an image `buffer.width * GLYPH_W`
-	/// pixels wide. HUD cells get a black background; the rest are see-through
-	/// except for their glyph, tinted by `TEXT_TINT` so it shows faintly against
-	/// the 3D surface of nearly the same color behind it.
+	/// pixels wide. HUD cells are drawn solid. Every other cell is the glyph on
+	/// black, cross-faded with the 3D view under it by the cell's lighting: the
+	/// alpha is 255 - light, so lit surfaces show the 3D render and shadows show
+	/// the text. Together the two always add up to a fully opaque picture.
 	pub(super) fn draw(&self, buffer: &Framebuffer, rgba: &mut [u8]) {
 		let row_bytes = buffer.width * GLYPH_W * 4;
 		for cy in 0..buffer.height {
 			for cx in 0..buffer.width {
-				let Cell { ch, rgb, ui } = buffer.color_buffer[cy * buffer.width + cx];
-				let rgb = if ui { rgb.map(|c| c as f32) } else { rgb.map(|c| (c as f32 * TEXT_TINT).min(255.0)) };
+				let Cell { ch, rgb, ui, light } = buffer.color_buffer[cy * buffer.width + cx];
+				let (rgb, alpha) = if ui {
+					(rgb.map(|c| c as f32), 255)
+				} else {
+					(rgb.map(|c| (c as f32 * TEXT_TINT).min(255.0)), 255 - light)
+				};
 				let glyph = &self.coverage[slot(ch)];
 				for (row, line) in glyph.iter().enumerate() {
 					let start = (cy * GLYPH_H + row) * row_bytes + cx * GLYPH_W * 4;
 					let pixels = &mut rgba[start..start + GLYPH_W * 4];
 					for (px, &lit) in pixels.chunks_exact_mut(4).zip(line) {
-						if ui {
-							let lit = lit as f32 / 255.0;
-							px[0] = (rgb[0] * lit) as u8;
-							px[1] = (rgb[1] * lit) as u8;
-							px[2] = (rgb[2] * lit) as u8;
-							px[3] = 255;
-						} else {
-							// Full glyph color; how much of it covers the 3D is the alpha
-							px[0] = rgb[0] as u8;
-							px[1] = rgb[1] as u8;
-							px[2] = rgb[2] as u8;
-							px[3] = lit;
-						}
+						let lit = lit as f32 / 255.0;
+						px[0] = (rgb[0] * lit) as u8;
+						px[1] = (rgb[1] * lit) as u8;
+						px[2] = (rgb[2] * lit) as u8;
+						px[3] = alpha;
 					}
 				}
 			}
@@ -131,19 +130,22 @@ mod tests {
 	}
 
 	#[test]
-	fn draw_hud_on_black_and_3d_text_see_through() {
+	fn draw_hud_solid_and_3d_text_faded_by_light() {
 		let sheet = GlyphSheet::load().unwrap();
-		let mut fb = Framebuffer::new(3, 1);
-		fb.color_buffer[0] = Cell { ch: '█', rgb: [200, 100, 50], ui: true };
-		fb.color_buffer[1] = Cell { ch: ' ', rgb: [0, 0, 0], ui: true };
-		fb.color_buffer[2] = Cell { ch: '█', rgb: [100, 100, 100], ui: false };
-		let mut rgba = vec![0u8; 3 * GLYPH_W * GLYPH_H * 4];
+		let mut fb = Framebuffer::new(4, 1);
+		fb.color_buffer[0] = Cell { ch: '█', rgb: [200, 100, 50], ui: true, light: 0 };
+		fb.color_buffer[1] = Cell { ch: ' ', rgb: [0, 0, 0], ui: true, light: 0 };
+		fb.color_buffer[2] = Cell { ch: '█', rgb: [100, 100, 100], ui: false, light: 55 };
+		fb.color_buffer[3] = EMPTY_CELL;
+		let mut rgba = vec![0u8; 4 * GLYPH_W * GLYPH_H * 4];
 		sheet.draw(&fb, &mut rgba);
 		let px = |cell: usize| &rgba[cell * GLYPH_W * 4..cell * GLYPH_W * 4 + 4];
 		assert_eq!(px(0), &[200, 100, 50, 255]);
 		// A HUD space is solid black
 		assert_eq!(px(1), &[0, 0, 0, 255]);
-		// Over the 3D view: slightly brighter than the surface
-		assert_eq!(px(2), &[125, 125, 125, 255]);
+		// Over the 3D view: slightly brighter, and dim, so mostly text
+		assert_eq!(px(2), &[125, 125, 125, 200]);
+		// Nothing drawn: all 3D
+		assert_eq!(px(3)[3], 0);
 	}
 }

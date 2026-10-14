@@ -5,21 +5,21 @@ use rand::seq::IndexedRandom;
 use rand::{Rng, RngExt};
 
 pub struct MapGrid {
-	pub width: usize,
-	pub height: usize,
-	/// true = Wall (#), false = Floor (.); indexed [x * height + y]
-	grid: Vec<bool>,
+	pub x: usize,
+	pub y: usize,
+	pub z: usize,
+	//welcome to the grid ARCADIANS
+	pub grid: Vec<bool>,
 }
-
 impl MapGrid {
 	/// A map that is solid wall everywhere.
-	pub fn new(width: usize, height: usize) -> Self {
-		Self { width, height, grid: vec![true; width * height] }
+	pub fn new(x: usize, y: usize, z: usize) -> Self {
+		Self { x, y, z, grid: vec![true; x * y] }
 	}
 
 	fn index(&self, x: i32, y: i32) -> Option<usize> {
-		let in_bounds = x >= 0 && y >= 0 && (x as usize) < self.width && (y as usize) < self.height;
-		in_bounds.then(|| x as usize * self.height + y as usize)
+		let in_bounds = x >= 0 && y >= 0 && (x as usize) < self.x && (y as usize) < self.y;
+		in_bounds.then(|| x as usize * self.y + y as usize)
 	}
 
 	/// Out-of-bounds coordinates are ignored.
@@ -36,9 +36,9 @@ impl MapGrid {
 
 	/// The map as text, one line per row.
 	pub fn render(&self) -> String {
-		let mut out = String::with_capacity((self.width + 1) * self.height);
-		for y in 0..self.height as i32 {
-			for x in 0..self.width as i32 {
+		let mut out = String::with_capacity((self.x + 1) * self.y);
+		for y in 0..self.y as i32 {
+			for x in 0..self.x as i32 {
 				out.push(if self.is_wall(x, y) { '#' } else { '.' });
 			}
 			out.push('\n');
@@ -78,11 +78,12 @@ pub fn generate_dungeon(
 	rng: &mut impl Rng,
 	width: usize,
 	height: usize,
+	depth: usize,
 	max_rooms: usize,
 	room_min: i32,
 	room_max: i32,
 ) -> MapGrid {
-	generate_dungeon_with_rooms(rng, width, height, max_rooms, room_min, room_max).0
+	generate_dungeon_with_rooms(rng, width, height, depth, max_rooms, room_min, room_max).0
 }
 
 /// Same as `generate_dungeon`, but also returns the rooms that were carved,
@@ -91,11 +92,12 @@ pub fn generate_dungeon_with_rooms(
 	rng: &mut impl Rng,
 	width: usize,
 	height: usize,
+	depth: usize,
 	max_rooms: usize,
 	room_min: i32,
 	room_max: i32,
 ) -> (MapGrid, Vec<Room>) {
-	let mut dungeon = MapGrid::new(width, height);
+	let mut dungeon = MapGrid::new(width, height, depth);
 	let mut rooms: Vec<Room> = Vec::new();
 	let (width, height) = (width as i32, height as i32);
 
@@ -151,7 +153,7 @@ pub fn generate_dungeon_with_rooms(
 // 2. Drunkard's Walk (Organic Caverns)
 // -------------------------------------------------------------------
 pub fn generate_drunkard_walk(rng: &mut impl Rng, width: usize, height: usize, fill_ratio: f64) -> MapGrid {
-	let mut dungeon = MapGrid::new(width, height);
+	let mut dungeon = MapGrid::new(width, height, 1);
 	// The walker can't touch the border, so it can carve at most the interior.
 	// Capping here stops a too-high fill_ratio from looping forever.
 	let interior = width.saturating_sub(2) * height.saturating_sub(2);
@@ -193,7 +195,7 @@ pub fn generate_cellular_cave(
 	fill_prob: f64,
 	iterations: usize,
 ) -> MapGrid {
-	let mut dungeon = MapGrid::new(width, height);
+	let mut dungeon = MapGrid::new(width, height, 1);
 	let (w, h) = (width as i32, height as i32);
 
 	// Initial random noise fill
@@ -207,7 +209,7 @@ pub fn generate_cellular_cave(
 
 	// Smoothing passes using 8-neighbor rule B5/S5-8
 	for _ in 0..iterations {
-		let mut next = MapGrid::new(width, height);
+		let mut next = MapGrid::new(width, height, 1);
 		for x in 1..w - 1 {
 			for y in 1..h - 1 {
 				let mut wall_count = 0;
@@ -243,7 +245,7 @@ pub fn print_demo() {
 	let mut rng = rand::rng();
 
 	println!("=== 1. CLASSIC ROOM & CORRIDOR ===");
-	print!("{}", generate_dungeon(&mut rng, 60, 18, 8, 4, 8).render());
+	print!("{}", generate_dungeon(&mut rng, 60, 18, 1, 8, 4, 8).render());
 
 	println!("\n=== 2. DRUNKARD'S WALK CAVERN ===");
 	print!("{}", generate_drunkard_walk(&mut rng, 60, 18, 0.35).render());
@@ -259,21 +261,21 @@ mod tests {
 	use rand::rngs::StdRng;
 
 	fn floor_count(map: &MapGrid) -> usize {
-		(0..map.width as i32)
-			.flat_map(|x| (0..map.height as i32).map(move |y| (x, y)))
+		(0..map.x as i32)
+			.flat_map(|x| (0..map.y as i32).map(move |y| (x, y)))
 			.filter(|&(x, y)| !map.is_wall(x, y))
 			.count()
 	}
 
 	fn border_is_solid(map: &MapGrid) -> bool {
-		let (w, h) = (map.width as i32, map.height as i32);
+		let (w, h) = (map.x as i32, map.y as i32);
 		(0..w).all(|x| map.is_wall(x, 0) && map.is_wall(x, h - 1))
 			&& (0..h).all(|y| map.is_wall(0, y) && map.is_wall(w - 1, y))
 	}
 
 	#[test]
 	fn off_map_is_wall_and_set_floor_ignores_it() {
-		let mut map = MapGrid::new(3, 3);
+		let mut map = MapGrid::new(3, 3, 1);
 		map.set_floor(-1, 5);
 		assert!(map.is_wall(-1, 0) && map.is_wall(3, 0));
 		map.set_floor(1, 1);
@@ -292,7 +294,7 @@ mod tests {
 		for seed in 0..20 {
 			let mut rng = StdRng::seed_from_u64(seed);
 			for map in [
-				generate_dungeon(&mut rng, 60, 18, 8, 4, 8),
+				generate_dungeon(&mut rng, 60, 18, 1, 8, 4, 8),
 				generate_drunkard_walk(&mut rng, 60, 18, 0.35),
 				generate_cellular_cave(&mut rng, 60, 18, 0.45, 4),
 			] {
