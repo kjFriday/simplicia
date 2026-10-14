@@ -9,10 +9,13 @@ fn main() {
 	collect(root, root, &mut files);
 	files.sort();
 
-	let mut code = String::from("pub static MODEL_FILES: &[(&str, &[u8])] = &[\n");
+	let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+	let mut code =String::from("pub static MODEL_FILES: &[(&str, &[u8])] = &[\n");
 	for (name, path) in &files {
 		println!("cargo:rerun-if-changed={}", path.display());
-		code.push_str(&format!("\t({:?}, include_bytes!({:?})),\n", name, path));
+		// include_bytes! resolves relative paths against OUT_DIR, so pass an absolute one
+		let abs = Path::new(&manifest_dir).join(path);
+		code.push_str(&format!("\t({:?}, include_bytes!({:?})),\n", name, abs));
 	}
 	code.push_str("];\n");
 

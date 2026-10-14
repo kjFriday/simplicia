@@ -9,6 +9,10 @@ const SHEET_PNG: &[u8] = include_bytes!("../../assets/dungeonmode/dungeonmode/bi
 pub(super) const GLYPH_W: usize = 8;
 pub(super) const GLYPH_H: usize = 8;
 
+/// How much brighter the text over the 3D view is than the surface it was
+/// drawn from. 1.0 would make it vanish; higher stands out more.
+const TEXT_TINT: f32 = 1.25;
+
 /// Unicode for each code page 437 slot, 0 to 255. Slot 0 is a blank.
 const CP437: [char; 256] = [
 	'\0', '☺', '☻', '♥', '♦', '♣', '♠', '•', '◘', '○', '◙', '♂', '♀', '♪', '♫', '☼',
@@ -69,22 +73,33 @@ impl GlyphSheet {
 	}
 
 	/// Draws the whole framebuffer into `rgba`, an image `buffer.width * GLYPH_W`
-	/// pixels wide, on a black background.
+	/// pixels wide. HUD cells get a black background; the rest are see-through
+	/// except for their glyph, tinted by `TEXT_TINT` so it shows faintly against
+	/// the 3D surface of nearly the same color behind it.
 	pub(super) fn draw(&self, buffer: &Framebuffer, rgba: &mut [u8]) {
 		let row_bytes = buffer.width * GLYPH_W * 4;
 		for cy in 0..buffer.height {
 			for cx in 0..buffer.width {
-				let Cell { ch, rgb } = buffer.color_buffer[cy * buffer.width + cx];
+				let Cell { ch, rgb, ui } = buffer.color_buffer[cy * buffer.width + cx];
+				let rgb = if ui { rgb.map(|c| c as f32) } else { rgb.map(|c| (c as f32 * TEXT_TINT).min(255.0)) };
 				let glyph = &self.coverage[slot(ch)];
 				for (row, line) in glyph.iter().enumerate() {
 					let start = (cy * GLYPH_H + row) * row_bytes + cx * GLYPH_W * 4;
 					let pixels = &mut rgba[start..start + GLYPH_W * 4];
 					for (px, &lit) in pixels.chunks_exact_mut(4).zip(line) {
-						let lit = lit as u32;
-						px[0] = (rgb[0] as u32 * lit / 255) as u8;
-						px[1] = (rgb[1] as u32 * lit / 255) as u8;
-						px[2] = (rgb[2] as u32 * lit / 255) as u8;
-						px[3] = 255;
+						if ui {
+							let lit = lit as f32 / 255.0;
+							px[0] = (rgb[0] * lit) as u8;
+							px[1] = (rgb[1] * lit) as u8;
+							px[2] = (rgb[2] * lit) as u8;
+							px[3] = 255;
+						} else {
+							// Full glyph color; how much of it covers the 3D is the alpha
+							px[0] = rgb[0] as u8;
+							px[1] = rgb[1] as u8;
+							px[2] = rgb[2] as u8;
+							px[3] = lit;
+						}
 					}
 				}
 			}
@@ -116,14 +131,19 @@ mod tests {
 	}
 
 	#[test]
-	fn draw_colors_glyph_pixels_and_leaves_the_rest_black() {
+	fn draw_hud_on_black_and_3d_text_see_through() {
 		let sheet = GlyphSheet::load().unwrap();
-		let mut fb = Framebuffer::new(2, 1);
-		fb.color_buffer[0] = Cell { ch: '█', rgb: [200, 100, 50] };
-		let mut rgba = vec![0u8; 2 * GLYPH_W * GLYPH_H * 4];
+		let mut fb = Framebuffer::new(3, 1);
+		fb.color_buffer[0] = Cell { ch: '█', rgb: [200, 100, 50], ui: true };
+		fb.color_buffer[1] = Cell { ch: ' ', rgb: [0, 0, 0], ui: true };
+		fb.color_buffer[2] = Cell { ch: '█', rgb: [100, 100, 100], ui: false };
+		let mut rgba = vec![0u8; 3 * GLYPH_W * GLYPH_H * 4];
 		sheet.draw(&fb, &mut rgba);
-		assert_eq!(&rgba[0..4], &[200, 100, 50, 255]);
-		// Second cell is a space: black
-		assert_eq!(&rgba[GLYPH_W * 4..GLYPH_W * 4 + 4], &[0, 0, 0, 255]);
+		let px = |cell: usize| &rgba[cell * GLYPH_W * 4..cell * GLYPH_W * 4 + 4];
+		assert_eq!(px(0), &[200, 100, 50, 255]);
+		// A HUD space is solid black
+		assert_eq!(px(1), &[0, 0, 0, 255]);
+		// Over the 3D view: slightly brighter than the surface
+		assert_eq!(px(2), &[125, 125, 125, 255]);
 	}
 }

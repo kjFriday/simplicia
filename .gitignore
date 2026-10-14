@@ -7,3 +7,4 @@ Cargo.toml
 /target
 /target/debug
 *.bin
+target/.rustc_info.json

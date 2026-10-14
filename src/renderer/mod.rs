@@ -30,9 +30,12 @@ struct Vertex {
 struct Cell {
 	ch: char,
 	rgb: [u8; 3],
+	/// HUD text like the minimap: drawn on solid black. Other cells are drawn
+	/// over the 3D view with a see-through background.
+	ui: bool,
 }
 
-const EMPTY_CELL: Cell = Cell { ch: ' ', rgb: [0, 0, 0] };
+const EMPTY_CELL: Cell = Cell { ch: ' ', rgb: [0, 0, 0], ui: false };
 
 struct Mesh {
 	vertices: Vec<Vertex>,
@@ -100,6 +103,11 @@ impl Renderer {
 			framebuffer: Framebuffer::new(0, 0),
 			glyphs: GlyphSheet::load()?,
 		})
+	}
+
+	/// Turns the view by mouse movement, in radians. Doesn't take a turn.
+	fn look(&mut self, yaw: f32, pitch: f32) {
+		self.levels[self.depth].player.look(yaw, pitch);
 	}
 
 	/// One action, one turn. Stepping onto stairs changes level: down generates
@@ -219,7 +227,7 @@ fn rasterize_triangle(
 				// Blend the corner colors, then darken by the light like the character does
 				let color = (w0 * colors[0] + w1 * colors[1] + w2 * colors[2]) * light_intensity;
 				let rgb = (color.clamp(Vec3::ZERO, Vec3::ONE) * 255.0).round();
-				let cell = Cell { ch: char_to_draw, rgb: [rgb.x as u8, rgb.y as u8, rgb.z as u8] };
+				let cell = Cell { ch: char_to_draw, rgb: [rgb.x as u8, rgb.y as u8, rgb.z as u8], ui: false };
 				buffer.set_pixel(x, y, depth, cell);
 			}
 		}

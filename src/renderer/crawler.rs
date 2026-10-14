@@ -50,9 +50,36 @@ pub(super) struct Player {
 	pub(super) y: i32,
 	/// Index into DIRECTIONS: 0 north, 1 east, 2 south, 3 west
 	facing: usize,
+	/// Mouselook, in radians, on top of `facing`. Yaw stays within ±45°: past
+	/// that, `facing` turns to the nearer direction so W walks where you look.
+	look_yaw: f32,
+	look_pitch: f32,
 }
 
+/// Furthest you can look up or down.
+const MAX_PITCH: f32 = 80.0 * std::f32::consts::PI / 180.0;
+
 impl Player {
+	fn new(x: i32, y: i32) -> Self {
+		Self { x, y, facing: 0, look_yaw: 0.0, look_pitch: 0.0 }
+	}
+
+	/// Turns the view by mouse movement, in radians. Positive yaw turns right,
+	/// positive pitch looks up.
+	pub(super) fn look(&mut self, yaw: f32, pitch: f32) {
+		use std::f32::consts::FRAC_PI_2;
+		self.look_yaw += yaw;
+		self.look_pitch = (self.look_pitch + pitch).clamp(-MAX_PITCH, MAX_PITCH);
+		while self.look_yaw > FRAC_PI_2 / 2.0 {
+			self.look_yaw -= FRAC_PI_2;
+			self.facing = (self.facing + 1) % 4;
+		}
+		while self.look_yaw < -FRAC_PI_2 / 2.0 {
+			self.look_yaw += FRAC_PI_2;
+			self.facing = (self.facing + 3) % 4;
+		}
+	}
+
 	/// 0 north, 1 east, 2 south, 3 west
 	pub(super) fn facing(&self) -> usize {
 		self.facing
@@ -69,7 +96,11 @@ impl Player {
 
 	pub(super) fn view_matrix(&self) -> Mat4 {
 		let (dx, dy) = self.forward();
-		glam::camera::rh::view::look_to_mat4(self.eye(), Vec3::new(dx as f32, 0.0, dy as f32), Vec3::Y)
+		// Map east (+X) is to the right of north (-Z), so turning right is a
+		// negative rotation about +Y
+		let dir = glam::Quat::from_rotation_y(-self.look_yaw) * Vec3::new(dx as f32, 0.0, dy as f32);
+		let dir = Vec3::new(dir.x * self.look_pitch.cos(), self.look_pitch.sin(), dir.z * self.look_pitch.cos());
+		glam::camera::rh::view::look_to_mat4(self.eye(), dir, Vec3::Y)
 	}
 
 	/// One action, one turn. Walls block movement.
@@ -322,7 +353,7 @@ impl World {
 		let seen = vec![false; map.width * map.height];
 		let mut world = Self {
 			map,
-			player: Player { x: start.0, y: start.1, facing: 0 },
+			player: Player::new(start.0, start.1),
 			meshes,
 			objects,
 			depth,
@@ -367,6 +398,19 @@ mod tests {
 			world.player.act(Action::TurnRight, &world.map);
 		}
 		assert_eq!(world.player.facing, facing);
+	}
+
+	#[test]
+	fn mouselook_turns_facing_past_45_degrees_and_clamps_pitch() {
+		let mut player = Player::new(0, 0);
+		player.look(50f32.to_radians(), 0.0);
+		assert_eq!(player.facing(), 1);
+		assert!((player.look_yaw - (-40f32).to_radians()).abs() < 1e-4);
+		// -40° - 10° = -50°, past -45°, so it turns back to north at +40°
+		player.look(-10f32.to_radians(), 0.0);
+		assert_eq!(player.facing(), 0);
+		player.look(0.0, 10.0);
+		assert_eq!(player.look_pitch, MAX_PITCH);
 	}
 
 	/// Stands the player on a floor tile next to `target`, facing it.

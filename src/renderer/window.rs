@@ -1,11 +1,12 @@
-// Shows the renderer in a Bevy window: the 3D view is drawn into a character
-// grid, the grid is drawn into a texture with the bitmap font, and the texture
-// fills the window as one sprite.
+// Shows the renderer in a Bevy window. Bevy draws the level's models in 3D;
+// on top, the same view drawn into a character grid with the bitmap font is
+// laid over it as one see-through sprite, plus the minimap.
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use bevy::window::PrimaryWindow;
+use bevy::input::mouse::AccumulatedMouseMotion;
+use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use super::font::{GLYPH_H, GLYPH_W};
 use super::{Action, Renderer};
@@ -14,6 +15,9 @@ use super::{Action, Renderer};
 /// raise it for a chunkier look.
 const PIXEL_SCALE: u32 = 1;
 
+/// Radians the view turns per pixel of mouse movement.
+const MOUSE_SENSITIVITY: f32 = 0.003;
+
 /// Runs the game in the primary window. Insert a `Renderer` resource
 /// (from `Renderer::new`) before running.
 pub struct RendererPlugin;
@@ -21,8 +25,88 @@ pub struct RendererPlugin;
 impl Plugin for RendererPlugin {
 	fn build(&self, app: &mut App) {
 		app.add_systems(Startup, setup)
-			.add_systems(Update, (handle_input, draw_frame).chain());
+			.add_systems(Update, (handle_input, mouse_look, sync_scene, sync_camera, draw_frame).chain());
 	}
+}
+
+/// The level whose models are spawned as Bevy 3D entities, and those entities.
+#[derive(Resource, Default)]
+struct Scene3d {
+	depth: Option<usize>,
+	entities: Vec<Entity>,
+}
+
+/// Marks the camera that draws the 3D models under the text.
+#[derive(Component)]
+struct WorldCamera;
+
+/// Turns one of our meshes into a Bevy mesh with vertex colors. Every triangle
+/// gets its own three vertices so its normal is flat, matching the text shading.
+fn to_bevy_mesh(mesh: &super::Mesh) -> Mesh {
+	use bevy::mesh::{Indices, PrimitiveTopology};
+	let mut positions = Vec::with_capacity(mesh.indices.len() * 3);
+	let mut normals = Vec::with_capacity(positions.capacity());
+	let mut colors = Vec::with_capacity(positions.capacity());
+	for tri in &mesh.indices {
+		let [a, b, c] = tri.map(|i| mesh.vertices[i]);
+		let n = (b.pos - a.pos).cross(c.pos - a.pos).normalize_or_zero();
+		for v in [a, b, c] {
+			positions.push(v.pos.to_array());
+			normals.push(n.to_array());
+			colors.push([v.color.x, v.color.y, v.color.z, 1.0]);
+		}
+	}
+	let count = positions.len() as u32;
+	Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+		.with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+		.with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+		.with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+		.with_inserted_indices(Indices::U32((0..count).collect()))
+}
+
+/// Respawns the 3D models whenever the player changes level.
+fn sync_scene(
+	mut commands: Commands,
+	renderer: Res<Renderer>,
+	mut scene: ResMut<Scene3d>,
+	mut meshes: ResMut<Assets<Mesh>>,
+	mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+	if scene.depth == Some(renderer.depth) {
+		return;
+	}
+	for entity in scene.entities.drain(..) {
+		commands.entity(entity).despawn();
+	}
+	scene.depth = Some(renderer.depth);
+
+	let world = &renderer.levels[renderer.depth];
+	// Vertex colors carry the model colors; the material just lets light shade them
+	let material = materials.add(StandardMaterial {
+		base_color: Color::WHITE,
+		perceptual_roughness: 1.0,
+		cull_mode: None,
+		double_sided: true,
+		..default()
+	});
+	let handles: Vec<_> = world.meshes.iter().map(|m| meshes.add(to_bevy_mesh(m))).collect();
+	for object in &world.objects {
+		let entity = commands
+			.spawn((
+				Mesh3d(handles[object.mesh].clone()),
+				MeshMaterial3d(material.clone()),
+				Transform::from_matrix(Mat4::from_cols_array(&object.transform.to_cols_array())),
+			))
+			.id();
+		scene.entities.push(entity);
+	}
+}
+
+/// Puts the 3D camera where the player's eye is, looking where they look.
+fn sync_camera(renderer: Res<Renderer>, mut cameras: Query<&mut Transform, With<WorldCamera>>) {
+	let Ok(mut transform) = cameras.single_mut() else { return };
+	let view = renderer.levels[renderer.depth].player.view_matrix();
+	*transform = Transform::from_matrix(Mat4::from_cols_array(&view.inverse().to_cols_array()));
 }
 
 /// The texture the character grid is drawn into, and the sprite showing it.
@@ -32,8 +116,42 @@ struct Screen {
 	sprite: Entity,
 }
 
-fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
-	commands.spawn(Camera2d);
+fn setup(
+	mut commands: Commands,
+	mut images: ResMut<Assets<Image>>,
+	mut cursors: Query<&mut CursorOptions, With<PrimaryWindow>>,
+	renderer: Res<Renderer>,
+) {
+	// The 3D models first, then the text drawn over them without clearing
+	commands.spawn((
+		Camera3d::default(),
+		Camera { order: 0, ..default() },
+		// No tonemapping, so the 3D colors stay close to the text's colors
+		bevy::core_pipeline::tonemapping::Tonemapping::None,
+		Projection::Perspective(PerspectiveProjection {
+			fov: 60f32.to_radians(),
+			near: super::NEAR_PLANE,
+			far: super::FAR_PLANE,
+			..default()
+		}),
+		WorldCamera,
+	));
+	commands.spawn((Camera2d, Camera { order: 1, clear_color: ClearColorConfig::None, ..default() }));
+
+	// The same sun the text shading uses, plus a little ambient light
+	let light_dir = Vec3::from_array(renderer.light_dir.to_array());
+	commands.spawn((
+		DirectionalLight { illuminance: 8_000.0, ..default() },
+		Transform::default().looking_to(light_dir, Vec3::Y),
+	));
+	commands.insert_resource(GlobalAmbientLight { brightness: 300.0, ..default() });
+	commands.init_resource::<Scene3d>();
+
+	// Mouselook: keep the cursor hidden and pinned to the window
+	if let Ok(mut cursor) = cursors.single_mut() {
+		cursor.grab_mode = CursorGrabMode::Locked;
+		cursor.visible = false;
+	}
 
 	let mut image = Image::new_fill(
 		Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
@@ -74,6 +192,13 @@ fn handle_input(
 				return;
 			}
 		}
+	}
+}
+
+fn mouse_look(motion: Res<AccumulatedMouseMotion>, mut renderer: ResMut<Renderer>) {
+	if motion.delta != Vec2::ZERO {
+		// Screen y grows downward, so moving the mouse up looks up
+		renderer.look(motion.delta.x * MOUSE_SENSITIVITY, -motion.delta.y * MOUSE_SENSITIVITY);
 	}
 }
 

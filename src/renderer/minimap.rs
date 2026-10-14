@@ -22,7 +22,7 @@ const PLAYER_ARROWS: [char; 4] = ['▲', '►', '▼', '◄'];
 
 fn put(buffer: &mut Framebuffer, x: i32, y: i32, ch: char, rgb: [u8; 3]) {
 	if x >= 0 && y >= 0 && (x as usize) < buffer.width && (y as usize) < buffer.height {
-		buffer.color_buffer[y as usize * buffer.width + x as usize] = Cell { ch, rgb };
+		buffer.color_buffer[y as usize * buffer.width + x as usize] = Cell { ch, rgb, ui: true };
 	}
 }
 
