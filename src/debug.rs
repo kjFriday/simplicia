@@ -1,16 +1,15 @@
 use bevy::prelude::*;
 
+pub mod dungeons;
+pub mod engine;
+pub mod game;
+pub mod history;
 pub mod overworld;
 pub mod quests;
-pub mod history;
-pub mod dungeons;
-pub mod renderer;
 
-
-pub fn main() -> std::io::Result<()>{
+pub fn main() -> std::io::Result<()> {
 	// Build the first level before opening the window, so a bad model fails fast
-	let renderer = renderer::Renderer::new()
-		.map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+	let state = game::Game::new().map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
 	App::new()
 		.add_plugins(
@@ -26,8 +25,8 @@ pub fn main() -> std::io::Result<()>{
 				// Pixel-art friendly: no blurring when textures are scaled
 				.set(ImagePlugin::default_nearest()),
 		)
-		.insert_resource(renderer)
-		.add_plugins(renderer::RendererPlugin)
+		.insert_resource(state)
+		.add_plugins(game::GamePlugin)
 		.run();
 
 	Ok(())

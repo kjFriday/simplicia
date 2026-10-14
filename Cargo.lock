@@ -3469,7 +3469,7 @@ dependencies = [
 
 [[package]]
 name = "rpg_game"
-version = "0.2.5"
+version = "0.2.8"
 dependencies = [
  "bevy",
  "crossterm",
