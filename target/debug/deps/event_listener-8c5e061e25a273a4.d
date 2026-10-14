@@ -1,7 +1,0 @@
-C:\Users\kfman\Desktop\rpg_game\target\debug\deps\event_listener-8c5e061e25a273a4.d: C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\event-listener-5.4.2\src\lib.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\event-listener-5.4.2\src\intrusive.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\event-listener-5.4.2\src\notify.rs
-
-C:\Users\kfman\Desktop\rpg_game\target\debug\deps\libevent_listener-8c5e061e25a273a4.rmeta: C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\event-listener-5.4.2\src\lib.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\event-listener-5.4.2\src\intrusive.rs C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\event-listener-5.4.2\src\notify.rs
-
-C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\event-listener-5.4.2\src\lib.rs:
-C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\event-listener-5.4.2\src\intrusive.rs:
-C:\Users\kfman\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\event-listener-5.4.2\src\notify.rs:

@@ -47,6 +47,7 @@ impl Plugin for RendererPlugin {
 					editor::update.run_if(resource_exists::<Editor>),
 					mouse_look,
 					sync_scene,
+					sync_enemies,
 					sync_camera,
 					draw_frame,
 				)
@@ -90,6 +91,35 @@ struct Scene3d {
 /// Marks the camera that draws the 3D models under the text.
 #[derive(Component)]
 struct WorldCamera;
+
+/// A part of an enemy's model, by the enemy's id.
+#[derive(Component)]
+struct EnemyModel(u32);
+
+/// Moves each enemy's model to its tile, turned to face the player, and
+/// removes the models of enemies that have died.
+fn sync_enemies(
+	mut commands: Commands,
+	renderer: Res<Renderer>,
+	mut models: Query<(Entity, &EnemyModel, &mut Transform)>,
+) {
+	let world = &renderer.levels[renderer.depth];
+	let player = world.player_pos();
+	for (entity, model, mut transform) in &mut models {
+		let Some(enemy) = world.enemies.iter().find(|e| e.id == model.0) else {
+			commands.entity(entity).despawn();
+			continue;
+		};
+		let at = world.tile_center_of(enemy.x, enemy.y);
+		let (at, player) = (Vec3::from_array(at.to_array()), Vec3::from_array(player.to_array()));
+		let face = Vec3::new(player.x, at.y, player.z);
+		*transform = Transform::from_translation(at);
+		if face.distance_squared(at) > 0.01 {
+			// The model's front is +Z
+			transform.look_at(at * 2.0 - face, Vec3::Y);
+		}
+	}
+}
 
 /// Turns one of our meshes into a Bevy mesh with vertex colors. Every triangle
 /// gets its own three vertices so its normal is flat, matching the text shading.
@@ -199,6 +229,14 @@ fn sync_scene(
 			))
 			.id();
 		scene.entities.push(entity);
+	}
+	// Enemies: tagged with their id so `sync_enemies` can move them
+	for enemy in &world.enemies {
+		for (mesh, material) in &parts[world.enemy_mesh] {
+			let entity =
+				commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), EnemyModel(enemy.id))).id();
+			scene.entities.push(entity);
+		}
 	}
 	for object in &world.objects {
 		let transform = Transform::from_matrix(Mat4::from_cols_array(&object.transform.to_cols_array()));
@@ -322,6 +360,7 @@ fn setup(
 /// more), and the pause key pauses. The cursor is only locked while playing.
 fn handle_input(
 	keys: Res<ButtonInput<KeyCode>>,
+	time: Res<Time>,
 	mut renderer: ResMut<Renderer>,
 	mut exit: MessageWriter<AppExit>,
 	mut cursors: Query<&mut CursorOptions, With<PrimaryWindow>>,
@@ -355,8 +394,10 @@ fn handle_input(
 		}
 	} else if keys.just_pressed(renderer.settings.key(Bind::Pause)) {
 		renderer.screen = Screen::Paused { selected: 0 };
+	} else if keys.just_pressed(renderer.settings.key(Bind::Map)) {
+		renderer.settings.map = renderer.settings.map.next();
 	} else {
-		play_turn(&keys, renderer, &mut exit);
+		play_turn(&keys, renderer, &mut exit, time.delta_secs());
 	}
 
 	// Lock the cursor for mouselook while playing; free it in menus
@@ -371,10 +412,23 @@ fn set_cursor_locked(cursors: &mut Query<&mut CursorOptions, With<PrimaryWindow>
 	}
 }
 
-/// One key press, one turn.
-fn play_turn(keys: &ButtonInput<KeyCode>, renderer: &mut Renderer, exit: &mut MessageWriter<AppExit>) {
+/// Outside combat: walk freely while keys are held, with Left/Right
+/// stepping sideways. In combat: one key press, one turn.
+fn play_turn(keys: &ButtonInput<KeyCode>, renderer: &mut Renderer, exit: &mut MessageWriter<AppExit>, dt: f32) {
 	// The bound key, plus the arrows, which always work
 	let key = |bind| renderer.settings.key(bind);
+	if !renderer.levels[renderer.depth].combat {
+		let held = |bind, arrow| if keys.any_pressed([key(bind), arrow]) { 1.0 } else { 0.0 };
+		let forward = held(Bind::Forward, KeyCode::ArrowUp) - held(Bind::Back, KeyCode::ArrowDown);
+		let strafe = held(Bind::TurnRight, KeyCode::ArrowRight) - held(Bind::TurnLeft, KeyCode::ArrowLeft);
+		if forward != 0.0 || strafe != 0.0 {
+			if let Err(e) = renderer.walk(forward, strafe, dt) {
+				eprintln!("error: {e}");
+				exit.write(AppExit::error());
+			}
+		}
+		return;
+	}
 	let bindings = [
 		([key(Bind::Forward), KeyCode::ArrowUp], Action::Forward),
 		([key(Bind::Back), KeyCode::ArrowDown], Action::Back),

@@ -15,18 +15,21 @@ pub(super) enum Bind {
 	TurnLeft,
 	TurnRight,
 	Pause,
+	Map,
 }
 
 impl Bind {
-	const ALL: [Bind; 5] = [Bind::Forward, Bind::Back, Bind::TurnLeft, Bind::TurnRight, Bind::Pause];
+	const ALL: [Bind; 6] = [Bind::Forward, Bind::Back, Bind::TurnLeft, Bind::TurnRight, Bind::Pause, Bind::Map];
 
 	fn label(self) -> &'static str {
 		match self {
 			Bind::Forward => "Forward",
 			Bind::Back => "Back",
-			Bind::TurnLeft => "Turn Left",
-			Bind::TurnRight => "Turn Right",
+			// Turns in combat; steps sideways when walking freely
+			Bind::TurnLeft => "Left",
+			Bind::TurnRight => "Right",
 			Bind::Pause => "Pause",
+			Bind::Map => "Map",
 		}
 	}
 
@@ -37,6 +40,27 @@ impl Bind {
 			Bind::TurnLeft => KeyCode::KeyA,
 			Bind::TurnRight => KeyCode::KeyD,
 			Bind::Pause => KeyCode::Escape,
+			Bind::Map => KeyCode::KeyM,
+		}
+	}
+}
+
+/// How the map is shown.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) enum MapView {
+	/// A panel in the top-right corner, around the player
+	Mini,
+	/// The whole level, filling the screen
+	Full,
+	Hidden,
+}
+
+impl MapView {
+	pub(super) fn next(self) -> Self {
+		match self {
+			MapView::Mini => MapView::Full,
+			MapView::Full => MapView::Hidden,
+			MapView::Hidden => MapView::Mini,
 		}
 	}
 }
@@ -53,12 +77,14 @@ pub(super) struct Settings {
 	/// renders. F2 toggles it anywhere.
 	pub(super) text_filter: bool,
 	/// One key per action, in `Bind::ALL` order
-	keys: [KeyCode; 5],
+	keys: [KeyCode; 6],
+	/// How the map is shown; the Map key cycles it
+	pub(super) map: MapView,
 }
 
 impl Default for Settings {
 	fn default() -> Self {
-		Self { text_scale: 4, text_filter: false, keys: Bind::ALL.map(Bind::default_key) }
+		Self { text_scale: 4, text_filter: false, keys: Bind::ALL.map(Bind::default_key), map: MapView::Mini }
 	}
 }
 

@@ -124,7 +124,24 @@ impl Renderer {
 	/// One action, one turn. Stepping onto stairs changes level: down generates
 	/// the next level the first time, up returns to the one above.
 	fn act(&mut self, action: Action) -> Result<(), String> {
-		match self.levels[self.depth].act(action) {
+		let arrival = self.levels[self.depth].act(action);
+		self.arrive(arrival)
+	}
+
+	/// Walks freely for `dt` seconds (outside combat); stairs work the same as
+	/// stepping onto them.
+	fn walk(&mut self, forward: f32, strafe: f32, dt: f32) -> Result<(), String> {
+		let arrival = self.levels[self.depth].walk(forward, strafe, dt);
+		self.arrive(arrival)
+	}
+
+	/// After a move: changes level on stairs, and ends the run on death.
+	fn arrive(&mut self, arrival: Option<Arrival>) -> Result<(), String> {
+		if self.levels[self.depth].hp <= 0 {
+			self.screen = menu::Screen::MainMenu { selected: 0 };
+			return Ok(());
+		}
+		match arrival {
 			Some(Arrival::StairsDown) => {
 				self.depth += 1;
 				if self.depth == self.levels.len() {
@@ -158,7 +175,13 @@ impl Renderer {
 		self.framebuffer.clear();
 		// Menus opened from the main menu cover the whole screen anyway
 		if self.screen == menu::Screen::Playing || matches!(self.screen, menu::Screen::Paused { .. }) {
-			minimap::draw(&self.levels[self.depth], &mut self.framebuffer);
+			let world = &self.levels[self.depth];
+			minimap::draw_status(world, &mut self.framebuffer);
+			match self.settings.map {
+				menu::MapView::Mini => minimap::draw(world, &mut self.framebuffer, false),
+				menu::MapView::Full => minimap::draw(world, &mut self.framebuffer, true),
+				menu::MapView::Hidden => {}
+			}
 		}
 		menu::draw(self.screen, &self.settings, &mut self.framebuffer);
 	}

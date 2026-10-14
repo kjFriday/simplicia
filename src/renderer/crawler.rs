@@ -146,14 +146,62 @@ pub(super) struct Player {
 	/// that, `facing` turns to the nearer direction so W walks where you look.
 	look_yaw: f32,
 	look_pitch: f32,
+	/// Where the feet are, in world space. In combat it's always the center of
+	/// tile (x, y); walking freely it can be anywhere, and (x, y) is the tile
+	/// it's in.
+	pos: Vec3,
 }
 
 /// Furthest you can look up or down.
 const MAX_PITCH: f32 = 80.0 * std::f32::consts::PI / 180.0;
 
+/// Free walking speed, meters per second.
+const WALK_SPEED: f32 = 5.0;
+/// How close the player's center can get to a wall, in meters.
+const PLAYER_RADIUS: f32 = 0.6;
+
 impl Player {
 	fn new(x: i32, y: i32, z: i32) -> Self {
-		Self { x, y, z, facing: 0, look_yaw: 0.0, look_pitch: 0.0 }
+		Self { x, y, z, facing: 0, look_yaw: 0.0, look_pitch: 0.0, pos: tile_center(x, y) }
+	}
+
+	/// Where the player looks, flat on the floor: the facing turned by mouselook.
+	fn heading(&self) -> Vec3 {
+		let (dx, dy) = self.forward();
+		glam::Quat::from_rotation_y(-self.look_yaw) * Vec3::new(dx as f32, 0.0, dy as f32)
+	}
+
+	/// Puts the feet back in the middle of the current tile and squares the
+	/// view to the facing, for turn-by-turn play.
+	fn snap_to_tile(&mut self) {
+		self.pos = tile_center(self.x, self.y);
+		self.look_yaw = 0.0;
+	}
+
+	/// True when a circle of PLAYER_RADIUS at `pos` overlaps a wall tile.
+	fn blocked(map: &MapGrid, pos: Vec3) -> bool {
+		let r = PLAYER_RADIUS;
+		[(-r, -r), (r, -r), (-r, r), (r, r)].iter().any(|(ox, oz)| {
+			let tx = ((pos.x + ox) / TILE).floor() as i32;
+			let ty = ((pos.z + oz) / TILE).floor() as i32;
+			map.is_wall(tx, ty)
+		})
+	}
+
+	/// Walks freely for `dt` seconds: `forward` and `strafe` are -1 to 1.
+	/// Each axis moves on its own, so the player slides along walls.
+	fn walk(&mut self, map: &MapGrid, forward: f32, strafe: f32, dt: f32) {
+		let ahead = self.heading();
+		let right = Vec3::new(-ahead.z, 0.0, ahead.x);
+		let step = (ahead * forward + right * strafe).normalize_or_zero() * WALK_SPEED * dt;
+		for axis in [Vec3::X, Vec3::Z] {
+			let next = self.pos + step * axis;
+			if !Self::blocked(map, next) {
+				self.pos = next;
+			}
+		}
+		self.x = (self.pos.x / TILE).floor() as i32;
+		self.y = (self.pos.z / TILE).floor() as i32;
 	}
 
 	/// Turns the view by mouse movement, in radians. Positive yaw turns right,
@@ -183,14 +231,13 @@ impl Player {
 
 	/// Where the eye is, in world space.
 	fn eye(&self) -> Vec3 {
-		tile_center(self.x, self.y) + Vec3::new(0.0, EYE_HEIGHT, 0.0)
+		self.pos + Vec3::new(0.0, EYE_HEIGHT, 0.0)
 	}
 
 	pub(super) fn view_matrix(&self) -> Mat4 {
-		let (dx, dy) = self.forward();
 		// Map east (+X) is to the right of north (-Z), so turning right is a
 		// negative rotation about +Y
-		let dir = glam::Quat::from_rotation_y(-self.look_yaw) * Vec3::new(dx as f32, 0.0, dy as f32);
+		let dir = self.heading();
 		let dir = Vec3::new(dir.x * self.look_pitch.cos(), self.look_pitch.sin(), dir.z * self.look_pitch.cos());
 		glam::camera::rh::view::look_to_mat4(self.eye(), dir, Vec3::Y)
 	}
@@ -219,6 +266,7 @@ impl Player {
 			return false;
 		}
 		(self.x, self.y) = (nx, ny);
+		self.pos = tile_center(nx, ny);
 		true
 	}
 }
@@ -239,7 +287,34 @@ pub(super) struct World {
 	pub(super) stairs_up: Option<(i32, i32, i32)>,
 	/// Tiles the minimap shows, indexed [x * height + y]
 	seen: Vec<bool>,
+	/// Living enemies
+	pub(super) enemies: Vec<Enemy>,
+	/// Index into `meshes` of the enemy model
+	pub(super) enemy_mesh: usize,
+	pub(super) hp: i32,
+	/// True while an enemy is close: movement is tile by tile, turn by turn
+	pub(super) combat: bool,
+	/// What happened lately, newest last
+	pub(super) log: Vec<String>,
 }
+
+/// A monster on the map. `id` stays the same for its whole life, so the 3D
+/// view can match its model to it.
+pub(super) struct Enemy {
+	pub(super) id: u32,
+	pub(super) x: i32,
+	pub(super) y: i32,
+	pub(super) hp: i32,
+}
+
+/// Enemies this close (in tiles, counting diagonals) start combat.
+const COMBAT_RANGE: i32 = 4;
+pub(super) const PLAYER_HP: i32 = 10;
+const ENEMY_HP: i32 = 3;
+const PLAYER_DAMAGE: i32 = 2;
+const ENEMY_DAMAGE: i32 = 1;
+/// Lines of the log kept.
+const LOG_LINES: usize = 4;
 
 /// How far around the player the minimap uncovers, in tiles.
 const REVEAL_RADIUS: i32 = 3;
@@ -272,17 +347,143 @@ impl World {
 		}
 	}
 
+	/// Where the player's feet are, in world space.
+	pub(super) fn player_pos(&self) -> Vec3 {
+		self.player.pos
+	}
+
+	/// The middle of a tile's floor, in world space.
+	pub(super) fn tile_center_of(&self, x: i32, y: i32) -> Vec3 {
+		tile_center(x, y)
+	}
+
+	/// Whether the player can see what's on a tile right now, so the map
+	/// shows enemies there: anything within twice the reveal radius.
+	pub(super) fn can_see(&self, x: i32, y: i32) -> bool {
+		(x - self.player.x).abs().max((y - self.player.y).abs()) <= REVEAL_RADIUS * 2
+	}
+
+	fn say(&mut self, line: impl Into<String>) {
+		self.log.push(line.into());
+		if self.log.len() > LOG_LINES {
+			self.log.remove(0);
+		}
+	}
+
+	fn enemy_at(&self, x: i32, y: i32) -> Option<usize> {
+		self.enemies.iter().position(|e| (e.x, e.y) == (x, y))
+	}
+
+	/// Enemies close enough to fight.
+	fn near(&self, e: &Enemy) -> bool {
+		(e.x - self.player.x).abs().max((e.y - self.player.y).abs()) <= COMBAT_RANGE
+	}
+
+	/// Starts or ends combat as enemies come and go. Starting it snaps the
+	/// player to the middle of their tile.
+	pub(super) fn update_combat(&mut self) {
+		let combat = self.enemies.iter().any(|e| self.near(e));
+		if combat && !self.combat {
+			self.player.snap_to_tile();
+			self.say("An enemy approaches!");
+		} else if !combat && self.combat {
+			self.say("The way is clear.");
+		}
+		self.combat = combat;
+	}
+
+	/// Walks freely for `dt` seconds, outside combat. Says whether the player
+	/// just stepped onto a staircase.
+	pub(super) fn walk(&mut self, forward: f32, strafe: f32, dt: f32) -> Option<Arrival> {
+		let before = (self.player.x, self.player.y);
+		self.player.walk(&self.map, forward, strafe, dt);
+		if (self.player.x, self.player.y) == before {
+			return None;
+		}
+		self.reveal_around_player();
+		self.update_combat();
+		self.arrival()
+	}
+
+	/// What's under the player now.
+	fn arrival(&self) -> Option<Arrival> {
+		let here = (self.player.x, self.player.y);
+		Some(if here == (self.stairs_down.0, self.stairs_down.1) {
+			Arrival::StairsDown
+		} else if Some(here) == self.stairs_up.map(|s| (s.0, s.1)) {
+			Arrival::StairsUp
+		} else {
+			Arrival::Floor
+		})
+	}
+
+	/// The enemies' turn in combat: each one close by attacks if it's next to
+	/// the player, or else steps toward them.
+	fn enemies_act(&mut self) {
+		let (px, py) = (self.player.x, self.player.y);
+		for i in 0..self.enemies.len() {
+			if !self.near(&self.enemies[i]) {
+				continue;
+			}
+			let (ex, ey) = (self.enemies[i].x, self.enemies[i].y);
+			let (dx, dy) = (px - ex, py - ey);
+			if dx.abs() + dy.abs() == 1 {
+				self.hp -= ENEMY_DAMAGE;
+				self.say(format!("The slime hits you ({} HP).", self.hp.max(0)));
+				continue;
+			}
+			// Step along the longer way first, then the other, if it's free
+			let steps = if dx.abs() >= dy.abs() {
+				[(dx.signum(), 0), (0, dy.signum())]
+			} else {
+				[(0, dy.signum()), (dx.signum(), 0)]
+			};
+			for (sx, sy) in steps {
+				let (nx, ny) = (ex + sx, ey + sy);
+				if (sx, sy) != (0, 0) && !self.map.is_wall(nx, ny) && self.enemy_at(nx, ny).is_none() && (nx, ny) != (px, py) {
+					self.enemies[i].x = nx;
+					self.enemies[i].y = ny;
+					break;
+				}
+			}
+		}
+	}
+
 	/// Passes an action to the player, uncovers the map around them, and says
-	/// whether they just stepped onto a staircase.
+	/// whether they just stepped onto a staircase. In combat, stepping into an
+	/// enemy attacks it, and every step or attack gives the enemies a turn.
 	pub(super) fn act(&mut self, action: Action) -> Option<Arrival> {
+		if self.combat && matches!(action, Action::Forward | Action::Back) {
+			let (dx, dy) = self.player.forward();
+			let sign = if action == Action::Forward { 1 } else { -1 };
+			let target = (self.player.x + dx * sign, self.player.y + dy * sign);
+			if let Some(i) = self.enemy_at(target.0, target.1) {
+				self.enemies[i].hp -= PLAYER_DAMAGE;
+				if self.enemies[i].hp <= 0 {
+					self.enemies.remove(i);
+					self.say("You slay the slime!");
+				} else {
+					self.say("You hit the slime.");
+				}
+				self.enemies_act();
+				self.update_combat();
+				return None;
+			}
+		}
+
 		let before = (self.player.x, self.player.y);
 		self.player.act(action, &self.map);
 		let here = (self.player.x, self.player.y);
 		if here == before {
-			// Turning in place, or bumping a wall, never triggers stairs
+			// Turning in place, or bumping a wall, never triggers stairs or
+			// costs a turn
 			return None;
 		}
 		self.reveal_around_player();
+		if self.combat {
+			self.enemies_act();
+		}
+		self.update_combat();
 		Some(if here == (self.stairs_down.0, self.stairs_down.1) {
 			Arrival::StairsDown
 		} else if Some(here) == self.stairs_up.map(|s| (s.0, s.1)) {
@@ -303,6 +504,7 @@ impl World {
 		self.player.x = tile.0 + step.0;
 		self.player.y = tile.1 + step.1;
 		self.player.z = tile.2;
+		self.player.pos = tile_center(self.player.x, self.player.y);
 
 		self.player.facing = facing;
 		self.reveal_around_player();
@@ -495,6 +697,7 @@ impl World {
 			b.meshes.len() - 1
 		};
 		let enemy_chance = (0.5 + depth as f64 * 0.1).min(1.0);
+		let mut enemies: Vec<Enemy> = Vec::new();
 		for (i, room) in rooms.iter().enumerate().skip(1) {
 			let mut taken = vec![start, stairs_down];
 			let kind = ROOM_KINDS[rng.random_range(0..ROOM_KINDS.len())];
@@ -518,7 +721,7 @@ impl World {
 			if rng.random_bool(enemy_chance) {
 				if let Some(t) = free_tile(rng, room, &taken) {
 					taken.push(t);
-					b.put(enemy, tile_center(t.0, t.1), rng.random_range(0.0..std::f32::consts::TAU));
+					enemies.push(Enemy { id: enemies.len() as u32, x: t.0, y: t.1, hp: ENEMY_HP });
 				}
 			}
 		}
@@ -536,6 +739,11 @@ impl World {
 			stairs_down: (stairs_down.0, stairs_down.1, z),
 			stairs_up: stairs_up.map(|(x, y)| (x, y, z)),
 			seen,
+			enemies,
+			enemy_mesh: enemy,
+			hp: PLAYER_HP,
+			combat: false,
+			log: Vec::new(),
 		};
 		world.place_player((start.0, start.1, z));
 		Ok(world)

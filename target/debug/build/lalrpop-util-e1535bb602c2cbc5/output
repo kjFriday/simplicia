@@ -1,2 +1,0 @@
-cargo::rustc-check-cfg=cfg(build_os_windows)
-cargo:rustc-cfg=build_os_windows

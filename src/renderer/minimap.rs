@@ -1,5 +1,6 @@
-// The minimap: a top-right panel showing the part of the level you've
-// uncovered, drawn over the 3D view after it has been rendered.
+// The map: a top-right panel showing the part of the level you've uncovered,
+// or the whole level filling the screen; plus the HP and log readout. Drawn
+// over the 3D view after it has been rendered.
 use super::*;
 
 /// Map tiles shown across and down, at most. Odd, so the player sits in the middle.
@@ -16,6 +17,9 @@ const STAIRS_DOWN: [u8; 3] = [255, 200, 60];
 const STAIRS_UP: [u8; 3] = [90, 200, 255];
 const PLAYER: [u8; 3] = [90, 255, 120];
 const TEXT: [u8; 3] = [220, 220, 220];
+const ENEMY: [u8; 3] = [255, 80, 70];
+const HURT: [u8; 3] = [255, 120, 90];
+const LOG: [u8; 3] = [170, 170, 170];
 
 /// Player arrow by facing: north, east, south, west.
 const PLAYER_ARROWS: [char; 4] = ['▲', '►', '▼', '◄'];
@@ -33,14 +37,18 @@ pub(super) fn put_str(buffer: &mut Framebuffer, x: i32, y: i32, text: &str, rgb:
 	}
 }
 
-/// Draws the panel into the top-right corner. Shrinks on small terminals and
-/// is skipped entirely if it wouldn't leave room to see the dungeon.
-pub(super) fn draw(world: &World, buffer: &mut Framebuffer) {
-	// Never take more than half the screen in either direction
-	let max_w = (buffer.width as i32 / 2 - 2) / CELLS_PER_TILE;
-	let max_h = buffer.height as i32 / 2 - 2;
-	let tiles_w = VIEW_TILES_W.min(max_w).min(world.map.x as i32);
-	let tiles_h = VIEW_TILES_H.min(max_h).min(world.map.y as i32);
+/// Draws the map. The minimap is a panel in the top-right corner that shrinks
+/// on small screens and is skipped if it wouldn't leave room to see the
+/// dungeon; ull shows as much of the level as fits, centered.
+pub(super) fn draw(world: &World, buffer: &mut Framebuffer, full: bool) {
+	let (max_w, max_h, want_w, want_h) = if full {
+		((buffer.width as i32 - 2) / CELLS_PER_TILE, buffer.height as i32 - 2, i32::MAX, i32::MAX)
+	} else {
+		// Never take more than half the screen in either direction
+		((buffer.width as i32 / 2 - 2) / CELLS_PER_TILE, buffer.height as i32 / 2 - 2, VIEW_TILES_W, VIEW_TILES_H)
+	};
+	let tiles_w = want_w.min(max_w).min(world.map.x as i32);
+	let tiles_h = want_h.min(max_h).min(world.map.y as i32);
 	if tiles_w < 5 || tiles_h < 3 {
 		return;
 	}
@@ -53,8 +61,11 @@ pub(super) fn draw(world: &World, buffer: &mut Framebuffer) {
 	// Panel position: flush with the top-right corner, border included
 	let panel_w = tiles_w * CELLS_PER_TILE + 2;
 	let panel_h = tiles_h + 2;
-	let x0 = buffer.width as i32 - panel_w;
-	let y0 = 0;
+	let (x0, y0) = if full {
+		((buffer.width as i32 - panel_w) / 2, (buffer.height as i32 - panel_h) / 2)
+	} else {
+		(buffer.width as i32 - panel_w, 0)
+	};
 
 	// Border, with the depth written into the top edge
 	for x in 1..panel_w - 1 {
@@ -79,6 +90,8 @@ pub(super) fn draw(world: &World, buffer: &mut Framebuffer) {
 				(PLAYER_ARROWS[world.player.facing()], PLAYER)
 			} else if !world.has_seen(mx, my) {
 				(' ', FLOOR)
+			} else if world.enemies.iter().any(|e| (e.x, e.y) == (mx, my) && world.can_see(mx, my)) {
+				('s', ENEMY)
 			} else if (mx, my, world.player.z) == world.stairs_down {
 				('>', STAIRS_DOWN)
 			} else if Some((mx, my, world.player.z)) == world.stairs_up {
@@ -96,5 +109,19 @@ pub(super) fn draw(world: &World, buffer: &mut Framebuffer) {
 				put(buffer, cx + extra, cy, if glyph == '#' { '#' } else { ' ' }, rgb);
 			}
 		}
+	}
+}
+
+/// HP, combat, and the last few log lines, in the bottom-left corner.
+pub(super) fn draw_status(world: &World, buffer: &mut Framebuffer) {
+	let bottom = buffer.height as i32 - 1;
+	let hp = format!("HP {}/{}", world.hp.max(0), crawler::PLAYER_HP);
+	let rgb = if world.hp * 3 <= crawler::PLAYER_HP { HURT } else { TEXT };
+	put_str(buffer, 0, bottom, &hp, rgb);
+	if world.combat {
+		put_str(buffer, hp.chars().count() as i32 + 2, bottom, "COMBAT", ENEMY);
+	}
+	for (i, line) in world.log.iter().rev().enumerate() {
+		put_str(buffer, 0, bottom - 1 - i as i32, line, LOG);
 	}
 }
