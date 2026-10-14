@@ -11,3 +11,4 @@ target/.rustc_info.json
 Cargo.lock
 /target
 /target/debug
+/target/debug/.fingerprint
