@@ -2,18 +2,12 @@
 // 16 x 16 grid of glyphs in IBM code page 437 order. The sheet is built into
 // the executable, like the models.
 use super::{Cell, Framebuffer};
-#[cfg(test)]
-use super::EMPTY_CELL;
 
 const SHEET_PNG: &[u8] = include_bytes!("../../assets/dungeonmode/dungeonmode/bitmap/dungeon-437.png");
 
 /// Glyph size in pixels.
 pub(super) const GLYPH_W: usize = 8;
 pub(super) const GLYPH_H: usize = 8;
-
-/// How much brighter the text over the 3D view is than the surface it was
-/// drawn from. 1.0 would make it vanish; higher stands out more.
-const TEXT_TINT: f32 = 1.25;
 
 /// Unicode for each code page 437 slot, 0 to 255. Slot 0 is a blank.
 const CP437: [char; 256] = [
@@ -74,31 +68,45 @@ impl GlyphSheet {
 		Ok(Self { coverage })
 	}
 
-	/// Draws the whole framebuffer into `rgba`, an image `buffer.width * GLYPH_W`
-	/// pixels wide. HUD cells are drawn solid. Every other cell is the glyph on
-	/// black, cross-faded with the 3D view under it by the cell's lighting: the
-	/// alpha is 255 - light, so lit surfaces show the 3D render and shadows show
-	/// the text. Together the two always add up to a fully opaque picture.
+	/// The glyph sheet for the GPU: 16 x 16 glyphs, white, with each pixel's ink
+	/// as alpha. The text filter shader draws its characters from this.
+	pub(super) fn atlas_rgba(&self) -> Vec<u8> {
+		let (w, h) = (16 * GLYPH_W, 16 * GLYPH_H);
+		let mut rgba = vec![0u8; w * h * 4];
+		for (slot, glyph) in self.coverage.iter().enumerate() {
+			let (gx, gy) = ((slot % 16) * GLYPH_W, (slot / 16) * GLYPH_H);
+			for (row, line) in glyph.iter().enumerate() {
+				for (col, &ink) in line.iter().enumerate() {
+					let i = ((gy + row) * w + gx + col) * 4;
+					rgba[i..i + 4].copy_from_slice(&[255, 255, 255, ink]);
+				}
+			}
+		}
+		rgba
+	}
+
+	/// Draws the HUD grid into `rgba`, an image `buffer.width * GLYPH_W` pixels
+	/// wide. HUD cells are drawn on solid black; the rest are fully transparent
+	/// so the text-filtered 3D view shows through.
 	pub(super) fn draw(&self, buffer: &Framebuffer, rgba: &mut [u8]) {
 		let row_bytes = buffer.width * GLYPH_W * 4;
 		for cy in 0..buffer.height {
 			for cx in 0..buffer.width {
-				let Cell { ch, rgb, ui, light } = buffer.color_buffer[cy * buffer.width + cx];
-				let (rgb, alpha) = if ui {
-					(rgb.map(|c| c as f32), 255)
-				} else {
-					(rgb.map(|c| (c as f32 * TEXT_TINT).min(255.0)), 255 - light)
-				};
+				let Cell { ch, rgb, ui } = buffer.color_buffer[cy * buffer.width + cx];
 				let glyph = &self.coverage[slot(ch)];
 				for (row, line) in glyph.iter().enumerate() {
 					let start = (cy * GLYPH_H + row) * row_bytes + cx * GLYPH_W * 4;
 					let pixels = &mut rgba[start..start + GLYPH_W * 4];
 					for (px, &lit) in pixels.chunks_exact_mut(4).zip(line) {
-						let lit = lit as f32 / 255.0;
-						px[0] = (rgb[0] * lit) as u8;
-						px[1] = (rgb[1] * lit) as u8;
-						px[2] = (rgb[2] * lit) as u8;
-						px[3] = alpha;
+						if ui {
+							let lit = lit as u32;
+							px[0] = (rgb[0] as u32 * lit / 255) as u8;
+							px[1] = (rgb[1] as u32 * lit / 255) as u8;
+							px[2] = (rgb[2] as u32 * lit / 255) as u8;
+							px[3] = 255;
+						} else {
+							px.copy_from_slice(&[0, 0, 0, 0]);
+						}
 					}
 				}
 			}
@@ -130,22 +138,26 @@ mod tests {
 	}
 
 	#[test]
-	fn draw_hud_solid_and_3d_text_faded_by_light() {
+	fn hud_cells_are_solid_and_the_rest_see_through() {
 		let sheet = GlyphSheet::load().unwrap();
-		let mut fb = Framebuffer::new(4, 1);
-		fb.color_buffer[0] = Cell { ch: '█', rgb: [200, 100, 50], ui: true, light: 0 };
-		fb.color_buffer[1] = Cell { ch: ' ', rgb: [0, 0, 0], ui: true, light: 0 };
-		fb.color_buffer[2] = Cell { ch: '█', rgb: [100, 100, 100], ui: false, light: 55 };
-		fb.color_buffer[3] = EMPTY_CELL;
-		let mut rgba = vec![0u8; 4 * GLYPH_W * GLYPH_H * 4];
+		let mut fb = Framebuffer::new(3, 1);
+		fb.color_buffer[0] = Cell { ch: '█', rgb: [200, 100, 50], ui: true };
+		fb.color_buffer[1] = Cell { ch: ' ', rgb: [0, 0, 0], ui: true };
+		let mut rgba = vec![0u8; 3 * GLYPH_W * GLYPH_H * 4];
 		sheet.draw(&fb, &mut rgba);
 		let px = |cell: usize| &rgba[cell * GLYPH_W * 4..cell * GLYPH_W * 4 + 4];
 		assert_eq!(px(0), &[200, 100, 50, 255]);
 		// A HUD space is solid black
 		assert_eq!(px(1), &[0, 0, 0, 255]);
-		// Over the 3D view: slightly brighter, and dim, so mostly text
-		assert_eq!(px(2), &[125, 125, 125, 200]);
-		// Nothing drawn: all 3D
-		assert_eq!(px(3)[3], 0);
+		// Not HUD: the filtered 3D view shows through
+		assert_eq!(px(2)[3], 0);
+	}
+
+	#[test]
+	fn atlas_has_full_block_ink_in_its_slot() {
+		let atlas = GlyphSheet::load().unwrap().atlas_rgba();
+		let s = slot('█');
+		let i = ((s / 16) * GLYPH_H * 16 * GLYPH_W + (s % 16) * GLYPH_W) * 4;
+		assert_eq!(&atlas[i..i + 4], &[255, 255, 255, 255]);
 	}
 }
