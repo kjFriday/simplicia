@@ -33,6 +33,7 @@ use bevy::ecs::resource::Resource;
 use glam::Vec3;
 
 use crate::engine::font::GlyphSheet;
+use crate::engine::icons::IconSheet;
 use crate::engine::hud::Framebuffer;
 use player::Action;
 use world::{Arrival, World};
@@ -58,6 +59,8 @@ pub struct Game {
 	settings: menu::Settings,
 	framebuffer: Framebuffer,
 	glyphs: GlyphSheet,
+	/// The Raven icons enemies and items are drawn with
+	icons: IconSheet,
 }
 
 impl Game {
@@ -74,6 +77,7 @@ impl Game {
 			settings: menu::Settings::default(),
 			framebuffer: Framebuffer::new(0, 0),
 			glyphs: GlyphSheet::load()?,
+			icons: IconSheet::load()?,
 		})
 	}
 

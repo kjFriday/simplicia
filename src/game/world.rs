@@ -36,12 +36,8 @@ pub(super) struct World {
 	pub(super) blockers: Vec<Blocker>,
 	/// Living enemies
 	pub(super) enemies: Vec<Enemy>,
-	/// Index into `meshes` of the enemy model
-	pub(super) enemy_mesh: usize,
 	/// Items lying on the floor
 	pub(super) items: Vec<GroundItem>,
-	/// Index into `meshes` of each item kind's model, in ItemKind::ALL's order
-	pub(super) item_meshes: [usize; 4],
 	/// HP, gold, and carried items
 	pub(super) hero: Hero,
 	/// True while an enemy is close: movement is tile by tile, turn by turn
@@ -110,11 +106,6 @@ impl World {
 		}
 	}
 
-	/// Where the player's feet are, in world space.
-	pub(super) fn player_pos(&self) -> Vec3 {
-		self.player.pos
-	}
-
 	/// The middle of a tile's floor, in world space.
 	pub(super) fn tile_center_of(&self, x: i32, y: i32) -> Vec3 {
 		tile_center(x, y)
@@ -161,12 +152,13 @@ impl World {
 			let sign = if action == Action::Forward { 1 } else { -1 };
 			let target = (self.player.x + dx * sign, self.player.y + dy * sign);
 			if let Some(i) = self.enemy_at(target.0, target.1) {
+				let name = self.enemies[i].kind.stats().name;
 				self.enemies[i].hp -= PLAYER_DAMAGE + if self.hero.sword { SWORD_BONUS } else { 0 };
 				if self.enemies[i].hp <= 0 {
 					self.enemies.remove(i);
-					self.say("You slay the slime!");
+					self.say(format!("You slay the {name}!"));
 				} else {
-					self.say("You hit the slime.");
+					self.say(format!("You hit the {name}."));
 				}
 				self.enemies_act();
 				self.update_combat();

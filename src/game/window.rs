@@ -12,9 +12,9 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use crate::engine::font::{GLYPH_H, GLYPH_W};
 use crate::engine::hud::Cell;
+use crate::engine::icons::Sprites;
 use crate::engine::scene::{model_parts, FAR_PLANE, NEAR_PLANE};
 use crate::engine::text_filter::{TextFilter, TextFilterPlugin};
-use super::items::ItemKind;
 use super::editor::{self, Editor};
 use super::controls::{self, Bind};
 use super::menu::{Request, Screen};
@@ -78,61 +78,73 @@ struct Scene3d {
 #[derive(Component)]
 struct WorldCamera;
 
-/// A part of an enemy's model, by the enemy's id.
+/// An enemy's sprite, by the enemy's id.
 #[derive(Component)]
 struct EnemyModel(u32);
 
-/// A part of an item's model, by the item's id.
+/// An item's sprite, by the item's id.
 #[derive(Component)]
 struct ItemModel(u32);
 
-/// How high items float above the floor, and how fast they spin (radians/s).
-const ITEM_HOVER: f32 = 0.6;
-const ITEM_SPIN: f32 = 1.5;
+/// Sprite sizes in meters, and how high items float above the floor.
+const ENEMY_SIZE: f32 = 1.8;
+const ITEM_SIZE: f32 = 0.8;
+const ITEM_HOVER: f32 = 0.5;
 
-/// Floats and spins each item on its tile; removes the ones picked up.
+/// A sprite standing at `foot` (the floor under its middle), `size` across,
+/// turned about Y to face `eye`.
+fn billboard(foot: Vec3, size: f32, eye: Vec3) -> Transform {
+	let center = foot + Vec3::Y * (size / 2.0);
+	let to_eye = Vec3::new(eye.x - center.x, 0.0, eye.z - center.z);
+	// The quad faces +Z; turn that toward the eye
+	let yaw = to_eye.x.atan2(to_eye.z);
+	Transform::from_translation(center).with_rotation(Quat::from_rotation_y(yaw)).with_scale(Vec3::new(size, size, 1.0))
+}
+
+/// The camera's position: where the 3D view is drawn from.
+fn eye_of(cameras: &Query<&Transform, With<WorldCamera>>) -> Vec3 {
+	cameras.single().map(|t| t.translation).unwrap_or_default()
+}
+
+/// Floats each item on its tile, facing the camera; removes the ones picked up.
 fn sync_items(
 	mut commands: Commands,
 	game: Res<Game>,
 	time: Res<Time>,
-	mut models: Query<(Entity, &ItemModel, &mut Transform)>,
+	cameras: Query<&Transform, With<WorldCamera>>,
+	mut models: Query<(Entity, &ItemModel, &mut Transform), Without<WorldCamera>>,
 ) {
 	let world = &game.levels[game.depth];
+	let eye = eye_of(&cameras);
 	let t = time.elapsed_secs();
 	for (entity, model, mut transform) in &mut models {
 		let Some(item) = world.items.iter().find(|it| it.id == model.0) else {
 			commands.entity(entity).despawn();
 			continue;
 		};
-		let at = Vec3::from_array(world.tile_center_of(item.x, item.y).to_array());
+		let floor = Vec3::from_array(world.tile_center_of(item.x, item.y).to_array());
 		let bob = (t * 2.0 + item.id as f32).sin() * 0.1;
-		*transform = Transform::from_translation(at + Vec3::Y * (ITEM_HOVER + bob))
-			.with_rotation(Quat::from_rotation_y(t * ITEM_SPIN + item.id as f32));
+		*transform = billboard(floor + Vec3::Y * (ITEM_HOVER + bob), ITEM_SIZE, eye);
 	}
 }
 
-/// Moves each enemy's model to its tile, turned to face the player, and
-/// removes the models of enemies that have died.
+/// Moves each enemy's sprite to its tile, facing the camera, and removes the
+/// sprites of enemies that have died.
 fn sync_enemies(
 	mut commands: Commands,
 	game: Res<Game>,
-	mut models: Query<(Entity, &EnemyModel, &mut Transform)>,
+	cameras: Query<&Transform, With<WorldCamera>>,
+	mut models: Query<(Entity, &EnemyModel, &mut Transform), Without<WorldCamera>>,
 ) {
 	let world = &game.levels[game.depth];
-	let player = world.player_pos();
+	let eye = eye_of(&cameras);
 	for (entity, model, mut transform) in &mut models {
 		let Some(enemy) = world.enemies.iter().find(|e| e.id == model.0) else {
 			commands.entity(entity).despawn();
 			continue;
 		};
-		let at = world.tile_center_of(enemy.x, enemy.y);
-		let (at, player) = (Vec3::from_array(at.to_array()), Vec3::from_array(player.to_array()));
-		let face = Vec3::new(player.x, at.y, player.z);
-		*transform = Transform::from_translation(at);
-		if face.distance_squared(at) > 0.01 {
-			// The model's front is +Z
-			transform.look_at(at * 2.0 - face, Vec3::Y);
-		}
+		let floor = Vec3::from_array(world.tile_center_of(enemy.x, enemy.y).to_array());
+		*transform = billboard(floor, ENEMY_SIZE, eye);
 	}
 }
 
@@ -144,6 +156,7 @@ fn sync_scene(
 	mut meshes: ResMut<Assets<Mesh>>,
 	mut materials: ResMut<Assets<StandardMaterial>>,
 	mut images: ResMut<Assets<Image>>,
+	mut sprites: Local<Option<Sprites>>,
 ) {
 	if scene.shown == Some((game.run, game.depth)) {
 		return;
@@ -182,22 +195,16 @@ fn sync_scene(
 			.id();
 		scene.entities.push(entity);
 	}
-	// Items: tagged with their id so `sync_items` can spin them and remove
-	// them once picked up
+	// Items and enemies as sprites, tagged with their ids so `sync_items`
+	// and `sync_enemies` can place them and remove them when they're gone
+	let sprites = sprites.get_or_insert_with(|| Sprites::new(&mut meshes));
 	for item in &world.items {
-		let mesh = world.item_meshes[ItemKind::ALL.iter().position(|&k| k == item.kind).unwrap_or(0)];
-		for (part, material) in &parts[mesh] {
-			let entity = commands.spawn((Mesh3d(part.clone()), MeshMaterial3d(material.clone()), ItemModel(item.id))).id();
-			scene.entities.push(entity);
-		}
+		let sprite = sprites.get(&game.icons, item.kind.icon(), &mut materials, &mut images);
+		scene.entities.push(commands.spawn((sprite, Transform::default(), ItemModel(item.id))).id());
 	}
-	// Enemies: tagged with their id so `sync_enemies` can move them
 	for enemy in &world.enemies {
-		for (mesh, material) in &parts[world.enemy_mesh] {
-			let entity =
-				commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), EnemyModel(enemy.id))).id();
-			scene.entities.push(entity);
-		}
+		let sprite = sprites.get(&game.icons, enemy.icon, &mut materials, &mut images);
+		scene.entities.push(commands.spawn((sprite, Transform::default(), EnemyModel(enemy.id))).id());
 	}
 	for object in &world.objects {
 		let transform = Transform::from_matrix(Mat4::from_cols_array(&object.transform.to_cols_array()));

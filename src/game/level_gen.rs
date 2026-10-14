@@ -3,7 +3,7 @@
 use glam::{Mat4, Vec3};
 use rand::{Rng, RngExt};
 
-use super::combat::{Enemy, ENEMY_HP};
+use super::combat::{Enemy, EnemyKind};
 use super::items::{GroundItem, Hero, ItemKind, ITEM_CHANCE};
 use super::player::Player;
 use super::world::*;
@@ -123,25 +123,6 @@ pub(super) const ROOM_KINDS: &[&[(&str, Vec3)]] = &[
 
 /// Treasure in the last room, by the way down.
 pub(super) const CHEST: (&str, Vec3) = ("Furniture/Chest_Closed.glb", WOOD);
-pub(super) const ENEMY: (&str, f32) = ("characters/Slime Enemy.glb", 2.4);
-
-/// Loads a model and reshapes it to stand on a tile: centered on X/Z, lowest
-/// point at y = 0, and scaled so its wider side is `footprint` world units.
-pub(super) fn load_tile_model(name: &str, footprint: f32) -> Result<Mesh, String> {
-	let mut mesh = Mesh::load(name)?;
-	let (min, max) = mesh.vertices.iter().fold(
-		(Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
-		|(min, max), v| (min.min(v.pos), max.max(v.pos)),
-	);
-	let size = max - min;
-	let widest = size.x.max(size.z);
-	let scale = if widest > 0.0 { footprint / widest } else { 1.0 };
-	let base = Vec3::new((min.x + max.x) * 0.5, min.y, (min.z + max.z) * 0.5);
-	for v in &mut mesh.vertices {
-		v.pos = (v.pos - base) * scale;
-	}
-	Ok(mesh)
-}
 
 /// Loads a kit model at its real size and tints it.
 pub(super) fn load_kit_model(name: &str, tint: Vec3) -> Result<Mesh, String> {
@@ -306,24 +287,11 @@ impl World {
 
 		// Furnish every room but the first, where the player starts. Each room
 		// gets a purpose and a few pieces of its furniture. Props are scenery
-		// for now: they don't block movement. Deeper levels get more slimes.
-		let enemy = {
-			b.meshes.push(load_tile_model(ENEMY.0, ENEMY.1)?);
-			b.meshes.len() - 1
-		};
+		// for now: they don't block movement. Deeper levels get more, and
+		// tougher, monsters.
 		let enemy_chance = (0.5 + depth as f64 * 0.1).min(1.0);
 		let mut enemies: Vec<Enemy> = Vec::new();
 		let mut items: Vec<GroundItem> = Vec::new();
-		let mut item_meshes = [0; 4];
-		for (slot, kind) in item_meshes.iter_mut().zip(ItemKind::ALL) {
-			let (name, tint, width) = kind.model();
-			let mut mesh = load_tile_model(name, width)?;
-			for v in &mut mesh.vertices {
-				v.color *= tint;
-			}
-			b.meshes.push(mesh);
-			*slot = b.meshes.len() - 1;
-		}
 		for (i, room) in rooms.iter().enumerate().skip(1) {
 			let mut taken = vec![start, stairs_down];
 			let kind = ROOM_KINDS[rng.random_range(0..ROOM_KINDS.len())];
@@ -364,7 +332,8 @@ impl World {
 			if rng.random_bool(enemy_chance) {
 				if let Some(t) = free_tile(rng, room, &taken) {
 					taken.push(t);
-					enemies.push(Enemy { id: enemies.len() as u32, x: t.0, y: t.1, hp: ENEMY_HP });
+					let kind = EnemyKind::pick(rng, depth);
+					enemies.push(Enemy::new(rng, enemies.len() as u32, kind, t.0, t.1));
 				}
 			}
 		}
@@ -384,9 +353,7 @@ impl World {
 			seen,
 			blockers,
 			enemies,
-			enemy_mesh: enemy,
 			items,
-			item_meshes,
 			hero: Hero::default(),
 			combat: false,
 			log: Vec::new(),

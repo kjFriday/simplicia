@@ -48,7 +48,7 @@ fn to_bevy_mesh(mesh: &crate::engine::mesh::Mesh, triangles: &[[usize; 3]]) -> M
 }
 
 /// Uploads one of our textures as a Bevy image: pixelated and repeating.
-fn to_bevy_image(texture: &Texture) -> Image {
+pub(crate) fn to_bevy_image(texture: &Texture) -> Image {
 	let mut image = Image::new(
 		Extent3d { width: texture.width, height: texture.height, depth_or_array_layers: 1 },
 		TextureDimension::D2,

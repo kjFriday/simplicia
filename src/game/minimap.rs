@@ -82,8 +82,8 @@ pub(super) fn draw(world: &World, buffer: &mut Framebuffer, full: bool) {
 				(' ', FLOOR)
 			} else if world.items.iter().any(|it| (it.x, it.y) == (mx, my)) {
 				('$', STAIRS_DOWN)
-			} else if world.enemies.iter().any(|e| (e.x, e.y) == (mx, my) && world.can_see(mx, my)) {
-				('s', ENEMY)
+			} else if let Some(e) = world.enemies.iter().find(|e| (e.x, e.y) == (mx, my) && world.can_see(mx, my)) {
+				(e.kind.stats().glyph, ENEMY)
 			} else if (mx, my, world.player.z) == world.stairs_down {
 				('>', STAIRS_DOWN)
 			} else if Some((mx, my, world.player.z)) == world.stairs_up {

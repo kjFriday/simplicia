@@ -1,8 +1,5 @@
 // Items: what lies on the floor, what the hero carries, and using it.
-use glam::Vec3;
-
 use super::combat::PLAYER_HP;
-use super::level_gen::IRON;
 use super::world::World;
 
 /// Things the player can pick up.
@@ -26,13 +23,13 @@ impl ItemKind {
 		}
 	}
 
-	/// Model, tint, and how wide it's drawn (bigger than life, so it's easy to spot).
-	pub(super) fn model(self) -> (&'static str, Vec3, f32) {
+	/// The Raven icon it's drawn with, on the floor.
+	pub(super) fn icon(self) -> u32 {
 		match self {
-			ItemKind::Potion => ("Objects/Potion_Red.glb", Vec3::new(0.9, 0.2, 0.2), 0.6),
-			ItemKind::Gold => ("Objects/Plate_Small.glb", Vec3::new(1.0, 0.8, 0.2), 0.7),
-			ItemKind::Sword => ("Objects/Sword.glb", IRON, 1.0),
-			ItemKind::Shield => ("Objects/Shield.glb", IRON, 1.0),
+			ItemKind::Potion => 123,
+			ItemKind::Gold => 130,
+			ItemKind::Sword => 1729,
+			ItemKind::Shield => 2113,
 		}
 	}
 
@@ -40,7 +37,7 @@ impl ItemKind {
 	pub(super) const WEIGHTS: [u32; 4] = [5, 3, 1, 1];
 }
 
-/// An item lying on the floor. `id` lets the 3D view match its model to it.
+/// An item lying on the floor. `id` lets the 3D view match its sprite to it.
 pub(super) struct GroundItem {
 	pub(super) id: u32,
 	pub(super) x: i32,

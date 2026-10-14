@@ -57,7 +57,7 @@ impl Bind {
 			Bind::TurnRight => KeyCode::KeyD,
 			Bind::Pause => KeyCode::Escape,
 			Bind::Map => KeyCode::KeyM,
-			Bind::Inventory => KeyCode::KeyI,
+			Bind::Inventory => KeyCode::KeyE,
 			Bind::Sprint => KeyCode::ShiftLeft,
 		}
 	}
@@ -121,6 +121,21 @@ pub(super) mod editor {
 
 /// A key's name as shown to the player: "W", "Space", "Up", "F2".
 pub(super) fn key_name(key: KeyCode) -> String {
+	let short = match key {
+		KeyCode::ShiftLeft => "L Shift",
+		KeyCode::ShiftRight => "R Shift",
+		KeyCode::ControlLeft => "L Ctrl",
+		KeyCode::ControlRight => "R Ctrl",
+		KeyCode::AltLeft => "L Alt",
+		KeyCode::AltRight => "R Alt",
+		KeyCode::Escape => "Esc",
+		KeyCode::Backspace => "Bksp",
+		KeyCode::NumpadEnter => "Num Enter",
+		_ => "",
+	};
+	if !short.is_empty() {
+		return short.to_string();
+	}
 	let name = format!("{key:?}");
 	let name = name.strip_prefix("Key").or(name.strip_prefix("Digit")).unwrap_or(&name);
 	name.strip_prefix("Arrow").unwrap_or(name).to_string()

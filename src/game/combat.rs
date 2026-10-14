@@ -1,22 +1,135 @@
-// Combat: slimes, damage, and the turn order once an enemy is close.
+// Combat: the monsters, their stats, and the turn order once one is close.
 use super::items::SHIELD_BLOCK;
 use super::world::World;
 
+/// The kinds of monster.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) enum EnemyKind {
+	ThornVine,
+	ShadowImp,
+	GreenSpider,
+	GreyRat,
+	ShadowBlob,
+}
+
+/// What a kind of monster is like.
+pub(super) struct EnemyStats {
+	pub(super) name: &'static str,
+	/// Raven icons it can be drawn with; one is picked per monster
+	pub(super) icons: &'static [u32],
+	/// Its letter on the map
+	pub(super) glyph: char,
+	pub(super) hp: i32,
+	pub(super) damage: i32,
+	/// Tiles it steps per turn; 0 never moves
+	pub(super) steps: u32,
+	/// Acts only every this many turns (2 is slow)
+	pub(super) every: u32,
+	/// How often it turns up at the top level, and how much more each level down
+	pub(super) weight: u32,
+	pub(super) weight_per_depth: u32,
+}
+
+impl EnemyKind {
+	pub(super) const ALL: [EnemyKind; 5] =
+		[EnemyKind::ThornVine, EnemyKind::ShadowImp, EnemyKind::GreenSpider, EnemyKind::GreyRat, EnemyKind::ShadowBlob];
+
+	pub(super) fn stats(self) -> EnemyStats {
+		let base = EnemyStats {
+			name: "",
+			icons: &[],
+			glyph: '?',
+			hp: 3,
+			damage: 1,
+			steps: 1,
+			every: 1,
+			weight: 1,
+			weight_per_depth: 0,
+		};
+		match self {
+			EnemyKind::ThornVine => EnemyStats {
+				name: "Thorn Vine",
+				icons: &[1067],
+				glyph: 'v',
+				hp: 5,
+				steps: 0,
+				weight: 2,
+				weight_per_depth: 1,
+				..base
+			},
+			EnemyKind::ShadowImp => EnemyStats {
+				name: "Shadow Imp",
+				icons: &[1381, 1382, 1383, 1384],
+				glyph: 'i',
+				weight: 3,
+				weight_per_depth: 1,
+				..base
+			},
+			EnemyKind::GreenSpider => {
+				EnemyStats { name: "Green Spider", icons: &[1066, 1070], glyph: 's', hp: 2, steps: 2, weight: 2, ..base }
+			}
+			EnemyKind::GreyRat => EnemyStats { name: "Grey Rat", icons: &[861], glyph: 'r', hp: 1, weight: 5, ..base },
+			EnemyKind::ShadowBlob => EnemyStats {
+				name: "Shadow Blob",
+				icons: &[1391],
+				glyph: 'b',
+				hp: 6,
+				damage: 2,
+				every: 2,
+				weight: 0,
+				weight_per_depth: 2,
+				..base
+			},
+		}
+	}
+
+	/// A random kind, with tougher ones likelier deeper down.
+	pub(super) fn pick(rng: &mut impl rand::Rng, depth: usize) -> Self {
+		use rand::RngExt;
+		let weight = |k: EnemyKind| {
+			let s = k.stats();
+			s.weight + s.weight_per_depth * depth as u32
+		};
+		let total: u32 = Self::ALL.iter().map(|&k| weight(k)).sum();
+		let mut roll = rng.random_range(0..total);
+		for k in Self::ALL {
+			if roll < weight(k) {
+				return k;
+			}
+			roll -= weight(k);
+		}
+		EnemyKind::GreyRat
+	}
+}
+
 /// A monster on the map. `id` stays the same for its whole life, so the 3D
-/// view can match its model to it.
+/// view can match its sprite to it.
 pub(super) struct Enemy {
 	pub(super) id: u32,
+	pub(super) kind: EnemyKind,
+	/// Which of its kind's icons it's drawn with
+	pub(super) icon: u32,
 	pub(super) x: i32,
 	pub(super) y: i32,
 	pub(super) hp: i32,
+	/// Turns it has waited, for kinds that act only every few turns
+	pub(super) waited: u32,
+}
+
+impl Enemy {
+	/// A fresh monster of `kind` on tile (x, y), drawn with a random one of its icons.
+	pub(super) fn new(rng: &mut impl rand::Rng, id: u32, kind: EnemyKind, x: i32, y: i32) -> Self {
+		use rand::RngExt;
+		let s = kind.stats();
+		let icon = s.icons[rng.random_range(0..s.icons.len())];
+		Self { id, kind, icon, x, y, hp: s.hp, waited: 0 }
+	}
 }
 
 /// Enemies this close (in tiles, counting diagonals) start combat.
 pub(super) const COMBAT_RANGE: i32 = 4;
 pub(super) const PLAYER_HP: i32 = 10;
-pub(super) const ENEMY_HP: i32 = 3;
 pub(super) const PLAYER_DAMAGE: i32 = 2;
-pub(super) const ENEMY_DAMAGE: i32 = 1;
 /// Lines of the log kept.
 pub(super) const LOG_LINES: usize = 4;
 
@@ -52,37 +165,63 @@ impl World {
 	}
 
 	/// The enemies' turn in combat: each one close by attacks if it's next to
-	/// the player, or else steps toward them.
+	/// the player, or else steps toward them, as fast as its kind allows.
 	pub(super) fn enemies_act(&mut self) {
-		let (px, py) = (self.player.x, self.player.y);
 		for i in 0..self.enemies.len() {
 			if !self.near(&self.enemies[i]) {
 				continue;
 			}
-			let (ex, ey) = (self.enemies[i].x, self.enemies[i].y);
-			let (dx, dy) = (px - ex, py - ey);
-			if dx.abs() + dy.abs() == 1 {
-				if self.hero.shield && rand::random_bool(SHIELD_BLOCK) {
-					self.say("Your shield turns the slime aside.");
-				} else {
-					self.hero.hp -= ENEMY_DAMAGE;
-					self.say(format!("The slime hits you ({} HP).", self.hero.hp.max(0)));
-				}
+			let stats = self.enemies[i].kind.stats();
+			self.enemies[i].waited += 1;
+			if self.enemies[i].waited < stats.every {
 				continue;
 			}
-			// Step along the longer way first, then the other, if it's free
-			let steps = if dx.abs() >= dy.abs() {
-				[(dx.signum(), 0), (0, dy.signum())]
-			} else {
-				[(0, dy.signum()), (dx.signum(), 0)]
-			};
-			for (sx, sy) in steps {
-				let (nx, ny) = (ex + sx, ey + sy);
-				if (sx, sy) != (0, 0) && !self.map.is_wall(nx, ny) && self.enemy_at(nx, ny).is_none() && (nx, ny) != (px, py) {
-					self.enemies[i].x = nx;
-					self.enemies[i].y = ny;
+			self.enemies[i].waited = 0;
+
+			if self.next_to_player(i) {
+				self.enemy_attacks(&stats);
+				continue;
+			}
+			for _ in 0..stats.steps {
+				self.step_toward_player(i);
+				if self.next_to_player(i) {
 					break;
 				}
+			}
+		}
+	}
+
+	fn next_to_player(&self, i: usize) -> bool {
+		let e = &self.enemies[i];
+		(self.player.x - e.x).abs() + (self.player.y - e.y).abs() == 1
+	}
+
+	fn enemy_attacks(&mut self, stats: &EnemyStats) {
+		if self.hero.shield && rand::random_bool(SHIELD_BLOCK) {
+			self.say(format!("Your shield turns the {} aside.", stats.name));
+		} else {
+			self.hero.hp -= stats.damage;
+			self.say(format!("The {} hits you ({} HP).", stats.name, self.hero.hp.max(0)));
+		}
+	}
+
+	/// One step toward the player: along the longer way first, then the
+	/// other, if the tile is free.
+	fn step_toward_player(&mut self, i: usize) {
+		let (px, py) = (self.player.x, self.player.y);
+		let (ex, ey) = (self.enemies[i].x, self.enemies[i].y);
+		let (dx, dy) = (px - ex, py - ey);
+		let steps = if dx.abs() >= dy.abs() {
+			[(dx.signum(), 0), (0, dy.signum())]
+		} else {
+			[(0, dy.signum()), (dx.signum(), 0)]
+		};
+		for (sx, sy) in steps {
+			let (nx, ny) = (ex + sx, ey + sy);
+			if (sx, sy) != (0, 0) && !self.map.is_wall(nx, ny) && self.enemy_at(nx, ny).is_none() && (nx, ny) != (px, py) {
+				self.enemies[i].x = nx;
+				self.enemies[i].y = ny;
+				return;
 			}
 		}
 	}

@@ -7,6 +7,8 @@
 pub mod font;
 /// The HUD's character grid and the functions that write text into it.
 pub mod hud;
+/// Raven icons, and drawing them as camera-facing sprites.
+pub mod icons;
 /// Triangle meshes and textures, and loading them from .obj and .glb files.
 pub mod mesh;
 /// Every model file under models/, built into the executable.

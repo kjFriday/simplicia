@@ -102,7 +102,8 @@ fn combat_snaps_to_tiles_and_bumping_an_enemy_attacks_it() {
 	world.player.facing = facing;
 	world.player.pos += Vec3::new(0.7, 0.0, 0.3);
 	let (dx, dy) = DIRECTIONS[facing];
-	world.enemies.push(Enemy { id: 0, x: world.player.x + 2 * dx, y: world.player.y + 2 * dy, hp: ENEMY_HP });
+	let (ex, ey) = (world.player.x + 2 * dx, world.player.y + 2 * dy);
+	world.enemies.push(Enemy::new(&mut StdRng::seed_from_u64(1), 0, EnemyKind::ShadowImp, ex, ey));
 	world.update_combat();
 	assert!(world.combat);
 	assert_eq!(world.player.pos, tile_center(world.player.x, world.player.y));
@@ -167,4 +168,52 @@ fn minimap_draws_in_the_top_right_and_reveals_only_nearby_tiles() {
 	assert!(fb.color_buffer.iter().any(|c| c.ch == arrow));
 	// Nothing drawn in the left half
 	assert!(fb.color_buffer.iter().enumerate().all(|(i, c)| i % 120 >= 60 || c.ch == ' '));
+}
+
+/// A level with no monsters or items, the player facing open floor for at
+/// least `reach` tiles; returns the direction faced.
+fn open_corridor(seed: u64, reach: i32) -> (World, (i32, i32)) {
+	for s in seed.. {
+		let mut world = World::generate(&mut StdRng::seed_from_u64(s), 0).unwrap();
+		world.enemies.clear();
+		world.items.clear();
+		for f in 0..4 {
+			let (dx, dy) = DIRECTIONS[f];
+			let (px, py) = (world.player.x, world.player.y);
+			if (1..=reach).all(|k| !world.map.is_wall(px + dx * k, py + dy * k)) {
+				world.player.facing = f;
+				return (world, (dx, dy));
+			}
+		}
+	}
+	unreachable!()
+}
+
+#[test]
+fn enemy_kinds_move_at_their_own_speed() {
+	let (mut world, (dx, dy)) = open_corridor(20, 4);
+	let (px, py) = (world.player.x, world.player.y);
+	let mut rng = StdRng::seed_from_u64(2);
+	world.enemies.push(Enemy::new(&mut rng, 0, EnemyKind::ThornVine, px + 4 * dx, py + 4 * dy));
+	world.update_combat();
+	world.enemies_act();
+	assert_eq!((world.enemies[0].x, world.enemies[0].y), (px + 4 * dx, py + 4 * dy), "vines never move");
+
+	world.enemies[0] = Enemy::new(&mut rng, 0, EnemyKind::GreenSpider, px + 4 * dx, py + 4 * dy);
+	world.enemies_act();
+	assert_eq!((world.enemies[0].x, world.enemies[0].y), (px + 2 * dx, py + 2 * dy), "spiders step twice");
+
+	world.enemies[0] = Enemy::new(&mut rng, 0, EnemyKind::ShadowBlob, px + 4 * dx, py + 4 * dy);
+	world.enemies_act();
+	assert_eq!((world.enemies[0].x, world.enemies[0].y), (px + 4 * dx, py + 4 * dy), "blobs wait a turn");
+	world.enemies_act();
+	assert_eq!((world.enemies[0].x, world.enemies[0].y), (px + 3 * dx, py + 3 * dy));
+}
+
+#[test]
+fn every_enemy_kind_has_icons_and_a_map_letter() {
+	for kind in EnemyKind::ALL {
+		let s = kind.stats();
+		assert!(!s.icons.is_empty() && s.glyph.is_ascii_lowercase() && s.hp > 0, "{kind:?}");
+	}
 }
