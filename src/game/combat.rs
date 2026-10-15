@@ -166,21 +166,23 @@ impl World {
 	}
 
 	/// Swings at whatever's on the tile in front: an enemy gets hit, a closed
-	/// chest opens. Hitting something in combat takes a turn; a swing at
-	/// nothing doesn't.
+	/// chest opens. Hitting something in combat takes a turn (as bumping into
+	/// it does); a swing at nothing doesn't.
 	pub(super) fn attack(&mut self) {
 		self.events.push(Event::Swing);
 		let (dx, dy) = self.player.forward();
 		let (tx, ty) = (self.player.x + dx, self.player.y + dy);
 		if let Some(i) = self.enemy_at(tx, ty) {
 			self.strike(i);
-			if self.combat {
-				self.enemies_act();
-			}
-			self.update_combat();
-		} else if let Some(c) = self.chest_at(tx, ty) {
+		} else if let Some(c) = self.chest_at(tx, ty).filter(|&c| !self.chests[c].open) {
 			self.open_chest(c);
+		} else {
+			return;
 		}
+		if self.combat {
+			self.enemies_act();
+		}
+		self.update_combat();
 	}
 
 	/// The player hits enemy `i`, killing it if that's its last HP.
@@ -243,7 +245,7 @@ impl World {
 	}
 
 	/// One step toward the player: along the longer way first, then the
-	/// other, if the tile is free.
+	/// other, if the tile is free (no wall, monster, or chest).
 	fn step_toward_player(&mut self, i: usize) {
 		let (px, py) = (self.player.x, self.player.y);
 		let (ex, ey) = (self.enemies[i].x, self.enemies[i].y);
@@ -259,6 +261,7 @@ impl World {
 				&& !self.map.is_wall(nx, ny)
 				&& self.terrain.can_step((ex, ey), (nx, ny))
 				&& self.enemy_at(nx, ny).is_none()
+				&& self.chest_at(nx, ny).is_none()
 				&& (nx, ny) != (px, py)
 			{
 				self.enemies[i].x = nx;

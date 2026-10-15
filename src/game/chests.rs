@@ -50,12 +50,14 @@ impl World {
 		let at = self.tile_center_of(cx, cy);
 		self.events.push(Event::ChestOpened { at });
 
-		// Free floor next to the chest (diagonals too)
+		// Free floor next to the chest (diagonals too), but not under the
+		// player, who picks things up by stepping onto them
 		let mut spots: Vec<(i32, i32)> = Vec::new();
 		for dx in -1..=1 {
 			for dy in -1..=1 {
 				let (x, y) = (cx + dx, cy + dy);
 				let busy = self.map.is_wall(x, y)
+					|| (x, y) == (self.player.x, self.player.y)
 					|| self.items.iter().any(|it| (it.x, it.y) == (x, y))
 					|| self.chest_at(x, y).is_some()
 					|| self.enemy_at(x, y).is_some()

@@ -225,7 +225,8 @@ pub(super) fn update(
 	mut cursors: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
 	let editor = &mut *editor;
-	let leave = editor.active && keys.just_pressed(key::LEAVE);
+	// Esc leaves the editor, except in the level browser, which it closes
+	let leave = editor.active && editor.browser.is_none() && keys.just_pressed(key::LEAVE);
 	if keys.just_pressed(key::TOGGLE) || leave {
 		editor.active = !editor.active;
 		if editor.active {
@@ -240,6 +241,7 @@ pub(super) fn update(
 			let mut ghost = std::mem::take(&mut editor.ghost);
 			spawner.despawn(&mut ghost);
 			editor.ghost_model = None;
+			editor.browser = None;
 		}
 		if let Ok(mut cursor) = cursors.single_mut() {
 			let locked = editor.active || game.screen == Screen::Playing;

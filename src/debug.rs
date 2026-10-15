@@ -26,6 +26,7 @@ pub fn main() -> std::io::Result<()> {
 				})
 				// Pixel-art friendly: no blurring when textures are scaled
 				.set(ImagePlugin::default_nearest()),
+				
 		)
 		.insert_resource(state)
 		.add_plugins(game::GamePlugin)

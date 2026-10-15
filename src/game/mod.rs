@@ -93,6 +93,8 @@ pub struct Game {
 	/// Fog: darkness, and the map showing only what's been seen. The debug
 	/// binary starts with it off and toggles it with F3.
 	fog: bool,
+	/// Shown on the main menu: how the last run ended
+	notice: Option<String>,
 }
 
 impl Game {
@@ -111,6 +113,7 @@ impl Game {
 			first_seed: None,
 			cells: Vec::new(),
 			fog: !dev_tools(),
+			notice: None,
 		};
 		game.make_cells();
 		game.levels = vec![game.make_level(0)?];
@@ -123,6 +126,7 @@ impl Game {
 		self.levels = vec![self.make_level(0)?];
 		self.depth = 0;
 		self.run += 1;
+		self.notice = None;
 		Ok(())
 	}
 
@@ -131,6 +135,8 @@ impl Game {
 	///   seed each time, except Play It's first level, which uses its seed.
 	/// - The base binary (the game) plays the saved presets in order (wrapping around);
 	///   with none saved it falls back to the default settings and a random seed.
+	/// - Settings no level can be made from (too few rooms fit, say) fall back
+	///   to the default settings and a random seed too, rather than ending the game.
 	fn make_level(&mut self, depth: usize) -> Result<World, String> {
 		use rand::SeedableRng;
 		let (settings, seed) = if let Some(seed) = self.first_seed.take().filter(|_| depth == 0) {
@@ -144,7 +150,11 @@ impl Game {
 			(presets::GenSettings::default(), rand::random())
 		};
 		let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-		World::generate_with(&mut rng, depth, &settings, &self.cells)
+		World::generate_with(&mut rng, depth, &settings, &self.cells).or_else(|e| {
+			eprintln!("level {}: {e}; using the default settings instead", depth + 1);
+			let mut rng = rand::rngs::StdRng::seed_from_u64(rand::random());
+			World::generate_with(&mut rng, depth, &presets::GenSettings::default(), &self.cells)
+		})
 	}
 
 	/// The startup stage before any level: loads the hand-made cells, and

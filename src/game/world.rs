@@ -76,6 +76,11 @@ impl Blocker {
 		let q = center + along * a1 + out * d1;
 		Self { min: p.min(q), max: p.max(q) }
 	}
+
+	/// Whether a square reaching `r` from `pos` on each side overlaps the box.
+	pub(super) fn touches(&self, pos: Vec3, r: f32) -> bool {
+		pos.x + r > self.min.x && pos.x - r < self.max.x && pos.z + r > self.min.z && pos.z - r < self.max.z
+	}
 }
 
 /// Half the width of the opening in an arched passage; the stone beyond it
@@ -224,20 +229,32 @@ impl World {
 		})
 	}
 
-	/// Puts the player on `tile`, facing open floor, and uncovers around them.
 	/// Puts the player on the first open tile next to `tile` (a staircase or
-	/// start), facing away from it, so they aren't standing inside the stairs.
+	/// start), facing away from it and looking straight ahead, so they aren't
+	/// standing inside the stairs; a tile no chest or monster is on, if there
+	/// is one. Uncovers the map around them.
 	pub(super) fn place_player(&mut self, tile: (i32, i32, i32)) {
-		let facing = open_facing(&self.map, tile);
-		let (dx, dy) = DIRECTIONS[facing];
-		// open_facing falls back to north when boxed in; stay put then
-		let step = if self.map.is_wall(tile.0 + dx, tile.1 + dy) { (0, 0) } else { (dx, dy) };
-		self.player.x = tile.0 + step.0;
-		self.player.y = tile.1 + step.1;
+		let next_to = |f: usize| (tile.0 + DIRECTIONS[f].0, tile.1 + DIRECTIONS[f].1);
+		let open: Vec<usize> = (0..4)
+			.filter(|&f| {
+				let (x, y) = next_to(f);
+				!self.map.is_wall(x, y)
+			})
+			.collect();
+		let free = open.iter().copied().find(|&f| {
+			let (x, y) = next_to(f);
+			self.chest_at(x, y).is_none() && self.enemy_at(x, y).is_none()
+		});
+		// Boxed in, the player stays on the tile itself, facing north
+		let facing = free.or(open.first().copied());
+		let (x, y) = facing.map_or((tile.0, tile.1), next_to);
+		self.player.x = x;
+		self.player.y = y;
 		self.player.z = tile.2;
-		self.player.pos = self.tile_center_of(self.player.x, self.player.y);
-
-		self.player.facing = facing;
+		self.player.pos = self.tile_center_of(x, y);
+		self.player.facing = facing.unwrap_or(0);
+		self.player.look_yaw = 0.0;
+		self.player.look_pitch = 0.0;
 		self.reveal_around_player();
 	}
 }

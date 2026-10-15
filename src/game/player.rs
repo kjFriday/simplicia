@@ -73,10 +73,7 @@ impl Player {
 			let ty = ((pos.z + oz) / TILE).floor() as i32;
 			map.is_wall(tx, ty)
 		});
-		in_wall
-			|| blockers.iter().any(|b| {
-				pos.x + r > b.min.x && pos.x - r < b.max.x && pos.z + r > b.min.z && pos.z - r < b.max.z
-			})
+		in_wall || blockers.iter().any(|b| b.touches(pos, r))
 	}
 
 	/// Walks freely for `dt` seconds: `forward` and `strafe` are -1 to 1.
@@ -86,10 +83,14 @@ impl Player {
 		let ahead = self.heading();
 		let right = Vec3::new(-ahead.z, 0.0, ahead.x);
 		let step = (ahead * forward + right * strafe).normalize_or_zero() * WALK_SPEED * dt;
+		// Blockers the player already stands in (snapped onto a chest's tile
+		// when combat started, say) don't hold them, so they can walk out
+		let start = self.pos;
+		let solid: Vec<Blocker> = blockers.iter().filter(|b| !b.touches(start, PLAYER_RADIUS)).copied().collect();
 		for axis in [Vec3::X, Vec3::Z] {
 			let next = self.pos + step * axis;
 			let climb = (terrain.at(next) - terrain.at(self.pos)).abs();
-			if !Self::blocked(map, blockers, next) && climb <= STEP_HEIGHT {
+			if !Self::blocked(map, &solid, next) && climb <= STEP_HEIGHT {
 				self.pos = next;
 			}
 		}
