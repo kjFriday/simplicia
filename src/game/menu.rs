@@ -5,6 +5,7 @@ use bevy::input::keyboard::KeyCode;
 
 use super::controls::{self, help, key_name, Bind, HelpLine};
 use super::items::{Hero, ItemKind};
+use super::presets::GenSettings;
 use crate::engine::hud::{put, put_str};
 use crate::engine::hud::Framebuffer;
 
@@ -43,11 +44,21 @@ pub(super) struct Settings {
 	keys: [KeyCode; Bind::ALL.len()],
 	/// How the map is shown; the Map key cycles it
 	pub(super) map: MapView,
+	/// The Generator screen's settings and seed (debug builds)
+	pub(super) generator: GenSettings,
+	pub(super) generator_seed: u64,
 }
 
 impl Default for Settings {
 	fn default() -> Self {
-		Self { text_scale: 4, text_filter: false, keys: Bind::ALL.map(Bind::default_key), map: MapView::Mini }
+		Self {
+			text_scale: 4,
+			text_filter: false,
+			keys: Bind::ALL.map(Bind::default_key),
+			map: MapView::Mini,
+			generator: GenSettings::default(),
+			generator_seed: rand::random(),
+		}
 	}
 }
 
@@ -83,6 +94,8 @@ pub(super) enum Screen {
 	KeyBinds { selected: usize, paused: bool, waiting: bool },
 	/// Every control, listed
 	Help { paused: bool },
+	/// Debug builds: the level generator's sliders, with a preview
+	Generator { selected: usize },
 }
 
 /// What a menu asks the game to do; everything else the menus handle themselves.
@@ -90,6 +103,10 @@ pub(super) enum Screen {
 pub(super) enum Request {
 	NewGame,
 	Quit,
+	/// Save the Generator screen's settings and seed as a level preset
+	SavePreset,
+	/// Start a game on the Generator screen's level
+	PlayGenerated,
 }
 
 /// What picking a line does.
@@ -107,13 +124,26 @@ enum Item {
 	TextFilter,
 	Rebind(Bind),
 	ResetKeys,
+	Generator,
+	Slider(usize),
+	Reroll,
+	SavePreset,
+	PlayGenerated,
 	Back,
 }
 
 impl Screen {
 	fn items(&self) -> Vec<Item> {
 		match self {
+			Screen::MainMenu { .. } if crate::game::dev_tools() => {
+				vec![Item::NewGame, Item::Options, Item::Help, Item::Generator, Item::Quit]
+			}
 			Screen::MainMenu { .. } => vec![Item::NewGame, Item::Options, Item::Help, Item::Quit],
+			Screen::Generator { .. } => {
+				let mut items: Vec<Item> = (0..GenSettings::SLIDERS.len()).map(Item::Slider).collect();
+				items.extend([Item::Reroll, Item::SavePreset, Item::PlayGenerated, Item::Back]);
+				items
+			}
 			Screen::Paused { .. } => vec![Item::Resume, Item::Options, Item::Help, Item::MainMenu, Item::Quit],
 			Screen::Help { .. } => vec![Item::Back],
 			Screen::Options { .. } => vec![Item::TextOptions, Item::KeyBinds, Item::Back],
@@ -133,7 +163,8 @@ impl Screen {
 			| Screen::Paused { selected }
 			| Screen::Options { selected, .. }
 			| Screen::TextOptions { selected, .. }
-			| Screen::KeyBinds { selected, .. } => Some(selected),
+			| Screen::KeyBinds { selected, .. }
+			| Screen::Generator { selected } => Some(selected),
 			Screen::Help { .. } => None,
 			Screen::Playing | Screen::Inventory { .. } => None,
 		}
@@ -161,6 +192,7 @@ impl Screen {
 			Screen::KeyBinds { paused, .. } => Screen::Options { selected: 1, paused },
 			Screen::Help { paused: true } => Screen::Paused { selected: 2 },
 			Screen::Help { paused: false } => Screen::MainMenu { selected: 2 },
+			Screen::Generator { .. } => Screen::MainMenu { selected: 3 },
 			other => other,
 		}
 	}
@@ -214,6 +246,10 @@ impl Screen {
 				settings.text_filter = !settings.text_filter;
 				return None;
 			}
+			Item::Slider(i) if left || right => {
+				settings.generator.nudge(i, step as i64);
+				return None;
+			}
 			_ => {}
 		}
 		if !pick {
@@ -236,6 +272,11 @@ impl Screen {
 				}
 			}
 			Item::ResetKeys => settings.keys = Bind::ALL.map(Bind::default_key),
+			Item::Generator => *self = Screen::Generator { selected: 0 },
+			Item::Reroll => settings.generator_seed = rand::random(),
+			Item::SavePreset => return Some(Request::SavePreset),
+			Item::PlayGenerated => return Some(Request::PlayGenerated),
+			Item::Slider(_) => {}
 			Item::Back => *self = self.back(),
 			Item::TextScale | Item::TextFilter => {}
 		}
@@ -262,6 +303,11 @@ fn line(item: Item, screen: Screen, settings: &Settings) -> String {
 			format!("{:<11}{:>11}", bind.label(), key)
 		}
 		Item::ResetKeys => "Reset to Defaults".into(),
+		Item::Generator => "Level Generator".into(),
+		Item::Slider(i) => format!("{:<11}< {:>3} >", GenSettings::SLIDERS[i].label, settings.generator.get(i)),
+		Item::Reroll => format!("New Seed ({})", settings.generator_seed % 100_000),
+		Item::SavePreset => "Save as Level".into(),
+		Item::PlayGenerated => "Play It".into(),
 		Item::Back => "Back".into(),
 	}
 }
@@ -279,6 +325,7 @@ pub(super) fn draw(screen: Screen, settings: &Settings, buffer: &mut Framebuffer
 	match screen {
 		Screen::Playing | Screen::Inventory { .. } => return,
 		Screen::Help { .. } => return draw_help(settings, buffer),
+		Screen::Generator { selected } => return draw_generator(settings, selected, buffer),
 		_ => {}
 	}
 	let selected = screen.selected();
@@ -342,6 +389,46 @@ pub(super) fn draw(screen: Screen, settings: &Settings, buffer: &mut Framebuffer
 		put_str(buffer, center(&text), top + i as i32, &text, rgb);
 	}
 	put_str(buffer, center(hint), top + lines.len() as i32 + 1, hint, HINT);
+}
+
+/// The Generator screen: the sliders down the left, and on the right the
+/// map they make from the current seed, rooms and halls shaded apart.
+fn draw_generator(settings: &Settings, selected: usize, buffer: &mut Framebuffer) {
+	let (w, h) = (buffer.width as i32, buffer.height as i32);
+	for y in 0..h {
+		for x in 0..w {
+			put(buffer, x, y, ' ', TEXT);
+		}
+	}
+	let screen = Screen::Generator { selected };
+	put_str(buffer, 1, 0, "LEVEL GENERATOR", HIGHLIGHT);
+	let items = screen.items();
+	for (i, item) in items.iter().enumerate() {
+		let text = line(*item, screen, settings);
+		let (text, rgb) = if i == selected { (format!("> {text}"), HIGHLIGHT) } else { (format!("  {text}"), TEXT) };
+		put_str(buffer, 1, 2 + i as i32, &text, rgb);
+	}
+	put_str(buffer, 1, 3 + items.len() as i32, "A/D change  Enter pick  Esc back", HINT);
+
+	// The preview, one character per map tile, scaled down to fit
+	let (map, rooms) = settings.generator.layout(settings.generator_seed);
+	let left = 30;
+	let (room_w, room_h) = ((w - left - 1).max(1), (h - 1).max(1));
+	let step = ((map.x as i32 + room_w - 1) / room_w).max((map.y as i32 + room_h - 1) / room_h).max(1);
+	let in_room = |x: i32, y: i32| rooms.iter().any(|r| x >= r.x1 && x < r.x2 && y >= r.y1 && y < r.y2);
+	for y in (0..map.y as i32).step_by(step as usize) {
+		for x in (0..map.x as i32).step_by(step as usize) {
+			let (ch, rgb) = if map.is_wall(x, y) {
+				('#', [90, 80, 70])
+			} else if in_room(x, y) {
+				('.', [200, 200, 200])
+			} else {
+				(',', [120, 160, 200])
+			};
+			put(buffer, left + x / step, 1 + y / step, ch, rgb);
+		}
+	}
+	put_str(buffer, left, 0, &format!("{} rooms  ('.' room, ',' hall)", rooms.len()), HINT);
 }
 
 /// The help screen: every control, grouped, over solid black, from

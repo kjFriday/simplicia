@@ -3,6 +3,7 @@
 use glam::{Mat4, Vec3};
 
 use super::world::{tile_center, Blocker, DIRECTIONS, EYE_HEIGHT, TILE, WALL_THICKNESS};
+use super::terrain::{Terrain, STEP_HEIGHT};
 use crate::dungeons::mapgen::MapGrid;
 
 /// What the player can do in one turn. The window maps keys to these.
@@ -53,8 +54,8 @@ impl Player {
 
 	/// Puts the feet back in the middle of the current tile and squares the
 	/// view to the facing, for turn-by-turn play.
-	pub(super) fn snap_to_tile(&mut self) {
-		self.pos = tile_center(self.x, self.y);
+	pub(super) fn snap_to_tile(&mut self, terrain: &Terrain) {
+		self.pos = tile_center(self.x, self.y) + Vec3::Y * terrain.tile(self.x, self.y);
 		self.look_yaw = 0.0;
 	}
 
@@ -77,17 +78,20 @@ impl Player {
 	}
 
 	/// Walks freely for `dt` seconds: `forward` and `strafe` are -1 to 1.
-	/// Each axis moves on its own, so the player slides along walls.
-	pub(super) fn walk(&mut self, map: &MapGrid, blockers: &[Blocker], forward: f32, strafe: f32, dt: f32) {
+	/// Each axis moves on its own, so the player slides along walls. The feet
+	/// follow the floor up and down; a rise or drop bigger than a step blocks.
+	pub(super) fn walk(&mut self, map: &MapGrid, blockers: &[Blocker], terrain: &Terrain, forward: f32, strafe: f32, dt: f32) {
 		let ahead = self.heading();
 		let right = Vec3::new(-ahead.z, 0.0, ahead.x);
 		let step = (ahead * forward + right * strafe).normalize_or_zero() * WALK_SPEED * dt;
 		for axis in [Vec3::X, Vec3::Z] {
 			let next = self.pos + step * axis;
-			if !Self::blocked(map, blockers, next) {
+			let climb = (terrain.at(next) - terrain.at(self.pos)).abs();
+			if !Self::blocked(map, blockers, next) && climb <= STEP_HEIGHT {
 				self.pos = next;
 			}
 		}
+		self.pos.y = terrain.at(self.pos);
 		self.x = (self.pos.x / TILE).floor() as i32;
 		self.y = (self.pos.z / TILE).floor() as i32;
 	}
@@ -130,12 +134,12 @@ impl Player {
 		glam::camera::rh::view::look_to_mat4(self.eye(), dir, Vec3::Y)
 	}
 
-	/// One action, one turn. Walls block movement.
+	/// One action, one turn. Walls, and rises too high to step, block movement.
 	/// Returns true if the player did something.
-	pub(super) fn act(&mut self, action: Action, map: &MapGrid) -> bool {
+	pub(super) fn act(&mut self, action: Action, map: &MapGrid, terrain: &Terrain) -> bool {
 		match action {
-			Action::Forward => self.step(map, 1),
-			Action::Back => self.step(map, -1),
+			Action::Forward => self.step(map, terrain, 1),
+			Action::Back => self.step(map, terrain, -1),
 			Action::TurnLeft => {
 				self.facing = (self.facing + 3) % 4;
 				true
@@ -147,14 +151,14 @@ impl Player {
 		}
 	}
 
-	pub(super) fn step(&mut self, map: &MapGrid, sign: i32) -> bool {
+	pub(super) fn step(&mut self, map: &MapGrid, terrain: &Terrain, sign: i32) -> bool {
 		let (dx, dy) = self.forward();
 		let (nx, ny) = (self.x + dx * sign, self.y + dy * sign);
-		if map.is_wall(nx, ny) {
+		if map.is_wall(nx, ny) || !terrain.can_step((self.x, self.y), (nx, ny)) {
 			return false;
 		}
 		(self.x, self.y) = (nx, ny);
-		self.pos = tile_center(nx, ny);
+		self.pos = tile_center(nx, ny) + Vec3::Y * terrain.tile(nx, ny);
 		true
 	}
 }

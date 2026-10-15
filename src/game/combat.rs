@@ -156,7 +156,7 @@ impl World {
 	pub(super) fn update_combat(&mut self) {
 		let combat = self.enemies.iter().any(|e| self.near(e));
 		if combat && !self.combat {
-			self.player.snap_to_tile();
+			self.player.snap_to_tile(&self.terrain);
 			self.say("An enemy approaches!");
 		} else if !combat && self.combat {
 			self.say("The way is clear.");
@@ -218,7 +218,12 @@ impl World {
 		};
 		for (sx, sy) in steps {
 			let (nx, ny) = (ex + sx, ey + sy);
-			if (sx, sy) != (0, 0) && !self.map.is_wall(nx, ny) && self.enemy_at(nx, ny).is_none() && (nx, ny) != (px, py) {
+			if (sx, sy) != (0, 0)
+				&& !self.map.is_wall(nx, ny)
+				&& self.terrain.can_step((ex, ey), (nx, ny))
+				&& self.enemy_at(nx, ny).is_none()
+				&& (nx, ny) != (px, py)
+			{
 				self.enemies[i].x = nx;
 				self.enemies[i].y = ny;
 				return;

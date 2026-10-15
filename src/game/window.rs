@@ -28,10 +28,13 @@ use super::Game;
 const SCENE_DIVISOR: u32 = 4;
 
 /// Torch light: brightness in lumens and reach in meters.
-const TORCH_LUMENS: f32 = 60_000.0;
+const TORCH_LUMENS: f32 = 200_000.0;
 const TORCH_RANGE: f32 = 14.0;
 /// Light everywhere, so unlit corners are dim rather than black.
-const AMBIENT: f32 = 120.0;
+const AMBIENT: f32 = 50.0;
+/// The lantern the player carries: brightness in lumens and reach in meters.
+const LANTERN_LUMENS: f32 = 250_000.0;
+const LANTERN_RANGE: f32 = 16.0;
 
 /// Radians the view turns per pixel of mouse movement.
 const MOUSE_SENSITIVITY: f32 = 0.003;
@@ -59,8 +62,8 @@ impl Plugin for GamePlugin {
 				)
 					.chain(),
 			);
-		// The level editor (F1) is only in debug builds
-		if cfg!(debug_assertions) {
+		// The level editor (F1) is only in the debug binary
+		if crate::game::dev_tools() {
 			app.init_resource::<Editor>();
 		}
 	}
@@ -276,6 +279,16 @@ fn setup(
 			..default()
 		}),
 		WorldCamera,
+		// The player's lantern goes wherever the camera does
+		children![(
+			PointLight {
+				color: Color::srgb(1.0, 0.85, 0.65),
+				intensity: LANTERN_LUMENS,
+				range: LANTERN_RANGE,
+				..default()
+			},
+			Transform::from_xyz(0.3, -0.3, 0.0),
+		)],
 	));
 	commands.spawn((Camera2d, Camera { order: 1, clear_color: ClearColorConfig::Custom(Color::BLACK), ..default() }));
 
@@ -294,13 +307,8 @@ fn setup(
 		.spawn((Mesh2d(meshes.add(Rectangle::new(1.0, 1.0))), MeshMaterial2d(filter.clone()), Transform::default()))
 		.id();
 
-	// The same sun the text shading uses, plus a little ambient light
-	let light_dir = Vec3::from_array(game.light_dir.to_array());
-	commands.spawn((
-		// Underground: only a faint fill, so shapes still read away from torches
-		DirectionalLight { illuminance: 1_200.0, ..default() },
-		Transform::default().looking_to(light_dir, Vec3::Y),
-	));
+	// Underground there's no sun: the lantern and torches light the way, over
+	// a dim ambient fill so unlit corners aren't pitch black
 	commands.insert_resource(GlobalAmbientLight { brightness: AMBIENT, ..default() });
 	commands.init_resource::<Scene3d>();
 
@@ -367,6 +375,18 @@ fn handle_input(
 		match game.screen.handle(&mut game.settings, &keys) {
 			Some(Request::NewGame) => {
 				if let Err(e) = game.new_game() {
+					eprintln!("error: {e}");
+					exit.write(AppExit::error());
+					return;
+				}
+				game.screen = Screen::Playing;
+			}
+			Some(Request::SavePreset) => {
+				let message = game.save_preset();
+				eprintln!("{message}");
+			}
+			Some(Request::PlayGenerated) => {
+				if let Err(e) = game.play_generated() {
 					eprintln!("error: {e}");
 					exit.write(AppExit::error());
 					return;

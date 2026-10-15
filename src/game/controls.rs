@@ -17,14 +17,16 @@ pub(super) enum Bind {
 	/// Turns in combat; steps sideways when walking freely
 	TurnLeft,
 	TurnRight,
+	/// Hold to walk faster (outside combat)
+	Sprint,
 	Pause,
 	Map,
 	Inventory,
-	/// Hold to walk faster (outside combat)
-	Sprint,
 }
 
 impl Bind {
+	// Keys are stored in ALL's order and looked up by `bind as usize`, so
+	// ALL must list the variants in declaration order (see the test below)
 	pub(super) const ALL: [Bind; 8] = [
 		Bind::Forward,
 		Bind::Back,
@@ -89,7 +91,7 @@ pub(super) const MENU_BACK: KeyCode = KeyCode::Escape;
 /// Switches between the ASCII and textured views, anywhere.
 pub(super) const TOGGLE_ASCII: KeyCode = KeyCode::F2;
 
-/// The level editor (debug builds only).
+/// The level editor (debug binary only).
 pub(super) mod editor {
 	use super::{KeyCode, MouseButton};
 
@@ -173,9 +175,9 @@ pub(super) fn help(key: impl Fn(Bind) -> KeyCode) -> Vec<HelpLine> {
 		Control("Enter / Space".into(), "select"),
 		Control(key_name(MENU_BACK), "back"),
 	];
-	if cfg!(debug_assertions) {
+	if crate::game::dev_tools() {
 		lines.extend([
-			Heading("Level editor (debug builds)"),
+			Heading("Level editor (debug binary)"),
 			Control(key_name(editor::TOGGLE), "open / close"),
 			Control("WASD Space Ctrl".into(), "fly (Shift: faster)"),
 			Control("Q E / R (Shift: 90°)".into(), "model / turn 15°"),
@@ -185,4 +187,16 @@ pub(super) fn help(key: impl Fn(Bind) -> KeyCode) -> Vec<HelpLine> {
 		]);
 	}
 	lines
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn all_lists_binds_in_declaration_order() {
+		for (i, bind) in Bind::ALL.iter().enumerate() {
+			assert_eq!(*bind as usize, i, "{bind:?} is out of place in Bind::ALL");
+		}
+	}
 }

@@ -4,20 +4,15 @@ use glam::{Mat4, Vec3};
 use rand::{Rng, RngExt};
 
 use super::combat::{Enemy, EnemyKind};
-use super::items::{GroundItem, Hero, ItemKind, ITEM_CHANCE};
+use super::items::{GroundItem, Hero, ItemKind};
 use super::player::Player;
 use super::world::*;
-use crate::dungeons::mapgen::{generate_dungeon_with_rooms, Room};
+use super::cells::{self, Cell};
+use super::presets::GenSettings;
+use crate::dungeons::mapgen::{generate_dungeon_with_options, Room};
 use crate::engine::mesh::Mesh;
 use crate::engine::scene::SceneObject;
 
-/// Map size and room settings handed to the room & corridor generator.
-pub(super) const MAP_WIDTH: usize = 48;
-pub(super) const MAP_HEIGHT: usize = 32;
-pub(super) const MAX_DEPTH: usize = 4;
-pub(super) const MAX_ROOMS: usize = 12;
-pub(super) const ROOM_MIN: i32 = 4;
-pub(super) const ROOM_MAX: i32 = 8;
 
 // The level is built from the modular dungeon kit in models/Tiles: 4 x 4 m
 // pieces centered on their origin with the floor at y = 0. Wall panels stand
@@ -155,13 +150,13 @@ pub(super) fn free_tile(rng: &mut impl Rng, room: &Room, taken: &[(i32, i32)]) -
 pub(super) struct Builder {
 	pub(super) meshes: Vec<Mesh>,
 	/// (model, tint) -> index into meshes
-	pub(super) loaded: Vec<((&'static str, [u32; 3]), usize)>,
+	pub(super) loaded: Vec<((String, [u32; 3]), usize)>,
 	pub(super) objects: Vec<SceneObject>,
 }
 
 impl Builder {
-	pub(super) fn model(&mut self, name: &'static str, tint: Vec3) -> Result<usize, String> {
-		let key = (name, tint.to_array().map(f32::to_bits));
+	pub(super) fn model(&mut self, name: &str, tint: Vec3) -> Result<usize, String> {
+		let key = (name.to_string(), tint.to_array().map(f32::to_bits));
 		if let Some(&(_, i)) = self.loaded.iter().find(|(k, _)| *k == key) {
 			return Ok(i);
 		}
@@ -173,6 +168,13 @@ impl Builder {
 	/// Places a model at `at` (world space), turned `yaw` about Y.
 	pub(super) fn put(&mut self, mesh: usize, at: Vec3, yaw: f32) {
 		self.objects.push(SceneObject { mesh, transform: Mat4::from_translation(at) * Mat4::from_rotation_y(yaw) });
+	}
+
+	/// How far below its origin a model reaches. Hand-placed models are
+	/// lifted by this, so they stand on the floor instead of sinking into it.
+	pub(super) fn sink(&self, mesh: usize) -> f32 {
+		let lowest = self.meshes[mesh].vertices.iter().map(|v| v.pos.y).fold(f32::INFINITY, f32::min);
+		if lowest.is_finite() { (-lowest).max(0.0) } else { 0.0 }
 	}
 
 	/// Like `put`, but stretched a little across the floor so the piece
@@ -187,10 +189,27 @@ impl Builder {
 }
 
 impl World {
-	/// Builds a level. The player starts in the first room, by the up staircase
-	/// when `depth` > 0; the down staircase is in the last room.
+	/// Builds a level with the default settings and the dungeon kit only.
 	pub(super) fn generate(rng: &mut impl Rng, depth: usize) -> Result<Self, String> {
-		let (map, rooms) = generate_dungeon_with_rooms(rng, MAP_WIDTH, MAP_HEIGHT, MAX_DEPTH, MAX_ROOMS, ROOM_MIN, ROOM_MAX);
+		Self::generate_with(rng, depth, &GenSettings::default(), &[])
+	}
+
+	/// Builds a level. The player starts in the first room, by the up staircase
+	/// when `depth` > 0; the down staircase is in the last room. Floor tiles
+	/// use a hand-built cell of the right kind when one exists, and the
+	/// dungeon kit otherwise.
+	pub(super) fn generate_with(rng: &mut impl Rng, depth: usize, settings: &GenSettings, cells: &[Cell]) -> Result<Self, String> {
+		let s = settings;
+		let (map, rooms) = generate_dungeon_with_options(
+			rng,
+			s.width,
+			s.height,
+			s.splits,
+			s.max_rooms,
+			s.room_min,
+			s.room_max,
+			s.diagonal as f64 / 100.0,
+		);
 		if rooms.len() < 2 {
 			return Err("the generator made fewer than 2 rooms, so there's nowhere for the stairs".into());
 		}
@@ -215,12 +234,23 @@ impl World {
 
 		let mut lights = Vec::new();
 		let mut blockers = Vec::new();
-		for x in 0..MAP_WIDTH as i32 {
-			for y in 0..MAP_HEIGHT as i32 {
+		for x in 0..map.x as i32 {
+			for y in 0..map.y as i32 {
 				if map.is_wall(x, y) {
 					continue;
 				}
 				let center = tile_center(x, y);
+				let up_here = stairs_up.is_some_and(|u| u == (x, y));
+				if (x, y) != stairs_down && !up_here {
+					if let Some((kind, turns)) = cells::fit(&map, x, y, in_room(x, y)) {
+						let choices: Vec<&Cell> = cells.iter().filter(|c| c.kind == kind).collect();
+						if !choices.is_empty() {
+							let cell = choices[rng.random_range(0..choices.len())];
+							place_cell(&mut b, &mut lights, cell, center, turns)?;
+							continue;
+						}
+					}
+				}
 				if (x, y) == stairs_down {
 					// No floor: a flight of steps going down into the dark
 					b.put(stairs_down_model, center - Vec3::Y * STAIRS_DOWN_DEPTH, facing_yaw(open_facing(&map, (x, y, 0))));
@@ -289,7 +319,7 @@ impl World {
 		// gets a purpose and a few pieces of its furniture. Props are scenery
 		// for now: they don't block movement. Deeper levels get more, and
 		// tougher, monsters.
-		let enemy_chance = (0.5 + depth as f64 * 0.1).min(1.0);
+		let enemy_chance = (s.enemies as f64 / 100.0 + depth as f64 * 0.1).min(1.0);
 		let mut enemies: Vec<Enemy> = Vec::new();
 		let mut items: Vec<GroundItem> = Vec::new();
 		for (i, room) in rooms.iter().enumerate().skip(1) {
@@ -312,7 +342,7 @@ impl World {
 					b.put(chest, tile_center(t.0, t.1), yaw);
 				}
 			}
-			if rng.random_bool(ITEM_CHANCE) {
+			if rng.random_bool(s.items as f64 / 100.0) {
 				if let Some(t) = free_tile(rng, room, &taken) {
 					taken.push(t);
 					let total: u32 = ItemKind::WEIGHTS.iter().sum();
@@ -361,4 +391,21 @@ impl World {
 		world.place_player((start.0, start.1, z));
 		Ok(world)
 	}
+}
+
+/// Places a cell's models on the tile at `center`, turned `turns` quarter
+/// turns clockwise, each lifted to stand on its spot. Lights in the cell
+/// (models under Lights/) also get a glow.
+fn place_cell(b: &mut Builder, lights: &mut Vec<Vec3>, cell: &Cell, center: Vec3, turns: usize) -> Result<(), String> {
+	let yaw = facing_yaw(turns);
+	let turn = glam::Quat::from_rotation_y(yaw);
+	for o in &cell.objects {
+		let mesh = b.model(&o.model, Vec3::ONE)?;
+		let at = center + turn * o.pos + Vec3::Y * b.sink(mesh);
+		b.put(mesh, at, yaw + o.yaw_degrees.to_radians());
+		if o.model.starts_with("Lights/") {
+			lights.push(at + Vec3::Y * 0.8);
+		}
+	}
+	Ok(())
 }

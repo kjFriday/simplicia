@@ -15,13 +15,14 @@ use super::controls::{self, editor as key};
 use super::menu::Screen;
 use crate::engine::hud::{put_str, Framebuffer};
 use crate::engine::scene::{model_parts, ModelParts};
+use super::cells::{CellKind, CELLS_DIR};
 use super::Game;
 use crate::engine::mesh::Mesh as ModelMesh;
 use crate::engine::models;
 
 /// Where prefabs are saved, and the file the editor starts on.
 const PREFAB_DIR: &str = "prefabs";
-const FIRST_PREFAB: &str = "room.prefab";
+const FIRST_PREFAB: &str = "prefabs/room.prefab";
 /// How far Z / X move the placement height, in meters.
 const HEIGHT_STEP: f32 = 0.25;
 /// How far R turns the model, in degrees; with Shift, a quarter turn.
@@ -60,7 +61,9 @@ pub(super) struct Editor {
 	ghost: Vec<Entity>,
 	ghost_model: Option<usize>,
 	/// Models already turned into Bevy meshes; None when one failed to load
-	cache: HashMap<&'static str, Option<ModelParts>>,
+	/// The second value is how far the model reaches below its origin; it's
+	/// lifted that much so it stands on the floor
+	cache: HashMap<&'static str, Option<(ModelParts, f32)>>,
 	/// Last thing that happened, shown in the HUD
 	status: String,
 	/// The prefab file being edited, under PREFAB_DIR
@@ -113,41 +116,60 @@ impl Editor {
 		Vec3::new(hit.x, self.height, hit.z)
 	}
 
+	/// The file being edited; `file` is its path from the game's folder.
 	fn path(&self) -> std::path::PathBuf {
-		Path::new(PREFAB_DIR).join(&self.file)
+		Path::new(&self.file).to_path_buf()
 	}
 }
 
-/// The level browser: the prefab files there are, and which is highlighted.
-/// The last entry is always "new level".
+/// The browser: every room prefab and cell saved so far, then a "new" entry
+/// for a room and for each kind of cell. Each room or cell is its own file.
 struct Browser {
+	/// Paths like prefabs/room.prefab or cells/room_edge_1.prefab
 	files: Vec<String>,
 	selected: usize,
 }
 
 impl Browser {
-	/// Lists PREFAB_DIR's .prefab files, highlighting `current` if it's there.
+	/// Lists prefabs/ and cells/, highlighting `current` if it's there.
 	fn open(current: &str) -> Self {
-		let mut files: Vec<String> = std::fs::read_dir(PREFAB_DIR)
-			.into_iter()
-			.flatten()
-			.flatten()
-			.filter_map(|e| e.file_name().into_string().ok())
-			.filter(|n| n.ends_with(".prefab"))
-			.collect();
-		files.sort();
+		let mut files = Vec::new();
+		for dir in [PREFAB_DIR, CELLS_DIR] {
+			let mut names: Vec<String> = std::fs::read_dir(dir)
+				.into_iter()
+				.flatten()
+				.flatten()
+				.filter_map(|e| e.file_name().into_string().ok())
+				.filter(|n| n.ends_with(".prefab"))
+				.map(|n| format!("{dir}/{n}"))
+				.collect();
+			names.sort();
+			files.extend(names);
+		}
 		let selected = files.iter().position(|f| f == current).unwrap_or(0);
 		Self { files, selected }
 	}
 
-	/// The highlighted file; None for "new level".
-	fn chosen(&self) -> Option<&str> {
-		self.files.get(self.selected).map(String::as_str)
+	/// Entries after the files: a new room, then a new cell of each kind.
+	fn new_entries(&self) -> Vec<String> {
+		let free = |prefix: &str| {
+			(1..).map(|n| format!("{prefix}_{n}.prefab")).find(|n| !self.files.contains(n)).unwrap()
+		};
+		let mut entries = vec![free(&format!("{PREFAB_DIR}/room"))];
+		entries.extend(CellKind::ALL.iter().map(|k| free(&format!("{CELLS_DIR}/{}", k.prefix()))));
+		entries
 	}
 
-	/// A file name for a new level that isn't taken yet.
-	fn new_name(&self) -> String {
-		(1..).map(|n| format!("level_{n}.prefab")).find(|n| !self.files.contains(n)).unwrap()
+	fn len(&self) -> usize {
+		self.files.len() + self.new_entries().len()
+	}
+
+	/// The highlighted file, and whether it's a new one.
+	fn chosen(&self) -> (String, bool) {
+		match self.files.get(self.selected) {
+			Some(f) => (f.clone(), false),
+			None => (self.new_entries()[self.selected - self.files.len()].clone(), true),
+		}
 	}
 }
 
@@ -169,11 +191,15 @@ impl Spawner<'_, '_> {
 	fn spawn(&mut self, editor: &mut Editor, model: &str, at: Transform) -> Vec<Entity> {
 		let Some(&name) = editor.palette.iter().find(|&&n| n == model) else { return Vec::new() };
 		let parts = editor.cache.entry(name).or_insert_with(|| {
-			ModelMesh::load(name)
-				.ok()
-				.map(|m| model_parts(&m, &mut self.meshes, &mut self.materials, &mut self.images))
+			ModelMesh::load(name).ok().map(|m| {
+				let lowest = m.vertices.iter().map(|v| v.pos.y).fold(f32::INFINITY, f32::min);
+				let sink = if lowest.is_finite() { (-lowest).max(0.0) } else { 0.0 };
+				(model_parts(&m, &mut self.meshes, &mut self.materials, &mut self.images), sink)
+			})
 		});
-		let Some(parts) = parts else { return Vec::new() };
+		let Some((parts, sink)) = parts else { return Vec::new() };
+		let mut at = at;
+		at.translation.y += *sink;
 		parts
 			.iter()
 			.map(|(mesh, material)| self.commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), at)).id())
@@ -290,8 +316,17 @@ pub(super) fn update(
 			editor.status = format!("{model} won't load");
 		}
 	}
+	// Lifted like placed models, so the preview shows where it will stand
+	let sink = editor
+		.palette
+		.get(editor.current)
+		.and_then(|m| editor.cache.get(m))
+		.and_then(|c| c.as_ref())
+		.map_or(0.0, |(_, s)| *s);
+	let mut lifted = at;
+	lifted.translation.y += sink;
 	for &e in &editor.ghost {
-		spawner.commands.entity(e).insert(at);
+		spawner.commands.entity(e).insert(lifted);
 	}
 
 	// Place and remove
@@ -366,7 +401,7 @@ fn open(editor: &mut Editor, spawner: &mut Spawner) {
 /// Enter opens it (or starts a new level), Esc or B closes the browser.
 fn browse(editor: &mut Editor, spawner: &mut Spawner, keys: &ButtonInput<KeyCode>) {
 	let Some(browser) = &mut editor.browser else { return };
-	let count = browser.files.len() + 1; // the files, then "new level"
+	let count = browser.len();
 	if keys.any_just_pressed(controls::MENU_UP) {
 		browser.selected = (browser.selected + count - 1) % count;
 	}
@@ -376,10 +411,7 @@ fn browse(editor: &mut Editor, spawner: &mut Spawner, keys: &ButtonInput<KeyCode
 	if keys.any_just_pressed([controls::MENU_BACK, key::BROWSER]) {
 		editor.browser = None;
 	} else if keys.any_just_pressed(controls::MENU_SELECT) {
-		editor.file = match browser.chosen() {
-			Some(file) => file.to_string(),
-			None => browser.new_name(),
-		};
+		editor.file = browser.chosen().0;
 		editor.browser = None;
 		open(editor, spawner);
 	}
@@ -402,7 +434,7 @@ fn load(path: &Path) -> Result<Vec<(String, Vec3, f32)>, String> {
 	parse(&text)
 }
 
-fn parse(text: &str) -> Result<Vec<(String, Vec3, f32)>, String> {
+pub(super) fn parse(text: &str) -> Result<Vec<(String, Vec3, f32)>, String> {
 	let mut out = Vec::new();
 	for (n, line) in text.lines().enumerate() {
 		let line = line.trim();
@@ -471,9 +503,9 @@ fn draw_browser(browser: &Browser, open_file: &str, buffer: &mut Framebuffer) {
 		.iter()
 		.map(|f| if f == open_file { format!("{f}  (open)") } else { f.clone() })
 		.collect();
-	lines.push(format!("+ new level ({})", browser.new_name()));
+	lines.extend(browser.new_entries().iter().map(|f| format!("+ new {f}")));
 	let top = 2;
-	put_str(buffer, 2, 0, &format!("LEVELS in {PREFAB_DIR}/"), HIGHLIGHT);
+	put_str(buffer, 2, 0, "ROOMS and CELLS (cells are one 4 m tile, built facing north)", HIGHLIGHT);
 	for (i, line) in lines.iter().enumerate() {
 		let chosen = i == browser.selected;
 		let text = if chosen { format!("> {line}") } else { format!("  {line}") };

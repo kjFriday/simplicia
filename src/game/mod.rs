@@ -3,11 +3,13 @@
 // (src/engine) does the loading and drawing; this module decides what's in
 // the world and what the player can do.
 
+/// Hand-built cells: the pieces rooms and halls are made of.
+mod cells;
 /// Combat: enemies, damage, and the turn order once one is close.
 mod combat;
 /// Every key and mouse button, and the help text listing them.
 mod controls;
-/// The debug-build level editor (F1).
+/// The level editor (F1), in the debug binary.
 mod editor;
 /// Items on the floor, the hero's bag, and using them.
 mod items;
@@ -17,6 +19,8 @@ mod level_gen;
 mod menu;
 /// The map panel and the HP/log readout.
 mod minimap;
+/// Generator settings and saved level presets.
+mod presets;
 /// Glowing gateways over the staircases.
 mod portals;
 /// The player: position, view, and movement.
@@ -40,6 +44,13 @@ use world::{Arrival, World};
 
 pub use window::GamePlugin;
 
+/// True in the `debug` binary, which has the level editor (F1) and the Level
+/// Generator, and makes fresh levels from the generator's settings. The
+/// `base` binary is the game: it plays the saved level presets.
+pub(crate) fn dev_tools() -> bool {
+	env!("CARGO_BIN_NAME") == "debug"
+}
+
 /// Holds everything that must survive between frames: the levels, the HUD's
 /// character grid, and the font that turns it into pixels. Lives in the Bevy
 /// world as a resource; `GamePlugin` drives it.
@@ -52,7 +63,6 @@ pub struct Game {
 	/// Goes up by one every new game, so the 3D scene knows to rebuild even
 	/// when the depth is the same
 	run: u32,
-	light_dir: Vec3,
 	/// Main menu, playing, or paused
 	screen: menu::Screen,
 	/// What the options menus set: text size, text filter, key binds
@@ -61,32 +71,76 @@ pub struct Game {
 	glyphs: GlyphSheet,
 	/// The Raven icons enemies and items are drawn with
 	icons: IconSheet,
+	/// Level presets saved from the Generator screen; the game build plays
+	/// these in order, one per depth
+	presets: Vec<presets::Preset>,
+	/// When set, the first level of the next game uses exactly this seed
+	/// (the Generator screen's Play It)
+	first_seed: Option<u64>,
 }
 
 impl Game {
 	pub fn new() -> Result<Self, String> {
 		//needs base ground plane from hex on round world grid.
-		let first_level = World::generate(&mut rand::rng(), 0)?;
-		Ok(Self {
-			levels: vec![first_level],
+		let mut game = Self {
+			levels: Vec::new(),
 			depth: 0,
 			run: 0,
-			//give sun angle
-			light_dir: Vec3::new(0.5, -1.0, -0.5).normalize(),
 			screen: menu::Screen::MainMenu { selected: 0 },
 			settings: menu::Settings::default(),
 			framebuffer: Framebuffer::new(0, 0),
 			glyphs: GlyphSheet::load()?,
 			icons: IconSheet::load()?,
-		})
+			presets: presets::Preset::load_all(),
+			first_seed: None,
+		};
+		game.levels = vec![game.make_level(0)?];
+		Ok(game)
 	}
 
 	/// Throws away every level and starts over on a fresh top level.
 	fn new_game(&mut self) -> Result<(), String> {
-		self.levels = vec![World::generate(&mut rand::rng(), 0)?];
+		self.presets = presets::Preset::load_all();
+		self.levels = vec![self.make_level(0)?];
 		self.depth = 0;
 		self.run += 1;
 		Ok(())
+	}
+
+	/// Builds the level for `depth` out of the saved cells.
+	/// - The debug binary uses the Generator screen's settings with a fresh random
+	///   seed each time, except Play It's first level, which uses its seed.
+	/// - The base binary (the game) plays the saved presets in order (wrapping around);
+	///   with none saved it falls back to the default settings and a random seed.
+	fn make_level(&mut self, depth: usize) -> Result<World, String> {
+		use rand::SeedableRng;
+		let (settings, seed) = if let Some(seed) = self.first_seed.take().filter(|_| depth == 0) {
+			(self.settings.generator, seed)
+		} else if crate::game::dev_tools() {
+			(self.settings.generator, rand::random())
+		} else if !self.presets.is_empty() {
+			let p = self.presets[depth % self.presets.len()];
+			(p.settings, p.seed)
+		} else {
+			(presets::GenSettings::default(), rand::random())
+		};
+		let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+		World::generate_with(&mut rng, depth, &settings, &cells::load_all())
+	}
+
+	/// Saves the Generator screen's level as a preset; says where.
+	fn save_preset(&mut self) -> String {
+		let preset = presets::Preset { settings: self.settings.generator, seed: self.settings.generator_seed };
+		match preset.save() {
+			Ok(name) => format!("saved {}/{name}", presets::LEVELS_DIR),
+			Err(e) => format!("save failed: {e}"),
+		}
+	}
+
+	/// Starts a game on the Generator screen's level.
+	fn play_generated(&mut self) -> Result<(), String> {
+		self.first_seed = Some(self.settings.generator_seed);
+		self.new_game()
 	}
 
 	/// Turns the view by mouse movement, in radians. Doesn't take a turn.
@@ -120,7 +174,7 @@ impl Game {
 			Some(Arrival::StairsDown) => {
 				self.depth += 1;
 				if self.depth == self.levels.len() {
-					let level = World::generate(&mut rand::rng(), self.depth)?;
+					let level = self.make_level(self.depth)?;
 					self.levels.push(level);
 				} else {
 					// Back on a level you've been to: arrive on its up staircase

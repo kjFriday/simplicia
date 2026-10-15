@@ -123,6 +123,22 @@ pub fn generate_dungeon_with_rooms(
 	room_min: i32,
 	room_max: i32,
 ) -> (MapGrid, Vec<Room>) {
+	generate_dungeon_with_options(rng, width, height, depth, max_rooms, room_min, room_max, DIAGONAL_CHANCE)
+}
+
+/// Like `generate_dungeon_with_rooms`, with the share of diagonal corridors
+/// (0 to 1) chosen by the caller.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_dungeon_with_options(
+	rng: &mut impl Rng,
+	width: usize,
+	height: usize,
+	depth: usize,
+	max_rooms: usize,
+	room_min: i32,
+	room_max: i32,
+	diagonal_chance: f64,
+) -> (MapGrid, Vec<Room>) {
 	let mut dungeon = MapGrid::new(width, height, depth);
 	let mut rooms: Vec<Room> = Vec::new();
 	let (width, height) = (width as i32, height as i32);
@@ -150,7 +166,7 @@ pub fn generate_dungeon_with_rooms(
 			let (prev_x, prev_y) = prev.center();
 			let (curr_x, curr_y) = new_room.center();
 
-			if rng.random_bool(DIAGONAL_CHANCE) {
+			if rng.random_bool(diagonal_chance.clamp(0.0, 1.0)) {
 				carve_diagonal(&mut dungeon, (prev_x, prev_y), (curr_x, curr_y));
 			} else if rng.random_bool(0.5) {
 				// Horizontal then vertical

@@ -4,6 +4,7 @@ use glam::Vec3;
 use super::combat::{Enemy, PLAYER_DAMAGE};
 use super::items::{GroundItem, Hero, SWORD_BONUS};
 use super::player::{Action, Player};
+use super::terrain::Terrain;
 use crate::dungeons::mapgen::MapGrid;
 use crate::engine::mesh::Mesh;
 use crate::engine::scene::SceneObject;
@@ -34,6 +35,8 @@ pub(super) struct World {
 	pub(super) seen: Vec<bool>,
 	/// Solid things inside walkable tiles that free walking can't pass
 	pub(super) blockers: Vec<Blocker>,
+	/// How high the floor is on every tile
+	pub(super) terrain: Terrain,
 	/// Living enemies
 	pub(super) enemies: Vec<Enemy>,
 	/// Items lying on the floor
@@ -87,7 +90,13 @@ pub(super) enum Arrival {
 
 /// Moving around the map, and what the player has seen.
 impl World {
-	pub(super) fn has_seen(&self, x: i32, y: i32) -> bool {
+	/// Whether the map shows tile (x, y). With `reveal_all` (fog off, in the
+	/// debug binary) it shows everything.
+	pub(super) fn has_seen(&self, x: i32, y: i32, reveal_all: bool) -> bool {
+		let on_map = x >= 0 && y >= 0 && (x as usize) < self.map.x && (y as usize) < self.map.y;
+		if reveal_all {
+			return on_map;
+		}
 		x >= 0
 			&& y >= 0
 			&& (x as usize) < self.map.x as usize
@@ -106,22 +115,23 @@ impl World {
 		}
 	}
 
-	/// The middle of a tile's floor, in world space.
+	/// The middle of a tile's floor, in world space, at the floor's height.
 	pub(super) fn tile_center_of(&self, x: i32, y: i32) -> Vec3 {
-		tile_center(x, y)
+		tile_center(x, y) + Vec3::Y * self.terrain.tile(x, y)
 	}
 
 	/// Whether the player can see what's on a tile right now, so the map
-	/// shows enemies there: anything within twice the reveal radius.
-	pub(super) fn can_see(&self, x: i32, y: i32) -> bool {
-		(x - self.player.x).abs().max((y - self.player.y).abs()) <= REVEAL_RADIUS * 2
+	/// shows enemies there: anything within twice the reveal radius, or
+	/// anywhere with `reveal_all`.
+	pub(super) fn can_see(&self, x: i32, y: i32, reveal_all: bool) -> bool {
+		reveal_all || (x - self.player.x).abs().max((y - self.player.y).abs()) <= REVEAL_RADIUS * 2
 	}
 
 	/// Walks freely for `dt` seconds, outside combat. Says whether the player
 	/// just stepped onto a staircase.
 	pub(super) fn walk(&mut self, forward: f32, strafe: f32, dt: f32) -> Option<Arrival> {
 		let before = (self.player.x, self.player.y);
-		self.player.walk(&self.map, &self.blockers, forward, strafe, dt);
+		self.player.walk(&self.map, &self.blockers, &self.terrain, forward, strafe, dt);
 		if (self.player.x, self.player.y) == before {
 			return None;
 		}
@@ -167,7 +177,7 @@ impl World {
 		}
 
 		let before = (self.player.x, self.player.y);
-		self.player.act(action, &self.map);
+		self.player.act(action, &self.map, &self.terrain);
 		let here = (self.player.x, self.player.y);
 		if here == before {
 			// Turning in place, or bumping a wall, never triggers stairs or
@@ -200,7 +210,7 @@ impl World {
 		self.player.x = tile.0 + step.0;
 		self.player.y = tile.1 + step.1;
 		self.player.z = tile.2;
-		self.player.pos = tile_center(self.player.x, self.player.y);
+		self.player.pos = self.tile_center_of(self.player.x, self.player.y);
 
 		self.player.facing = facing;
 		self.reveal_around_player();

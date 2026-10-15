@@ -67,8 +67,6 @@ pub(super) const POTION_HEAL: i32 = 5;
 pub(super) const SWORD_BONUS: i32 = 1;
 /// Chance the shield turns a hit aside.
 pub(super) const SHIELD_BLOCK: f64 = 0.5;
-/// Chance a furnished room has an item lying in it.
-pub(super) const ITEM_CHANCE: f64 = 0.6;
 
 /// Picking things up and using them.
 impl World {
