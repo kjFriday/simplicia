@@ -35,6 +35,20 @@ impl ItemKind {
 
 	/// How likely each kind is to turn up, in ALL's order.
 	pub(super) const WEIGHTS: [u32; 4] = [5, 3, 1, 1];
+
+	/// A random kind, as often as WEIGHTS says.
+	pub(super) fn random(rng: &mut impl rand::Rng) -> Self {
+		use rand::RngExt;
+		let total: u32 = Self::WEIGHTS.iter().sum();
+		let mut roll = rng.random_range(0..total);
+		for (kind, weight) in Self::ALL.into_iter().zip(Self::WEIGHTS) {
+			if roll < weight {
+				return kind;
+			}
+			roll -= weight;
+		}
+		ItemKind::Potion
+	}
 }
 
 /// An item lying on the floor. `id` lets the 3D view match its sprite to it.
@@ -43,6 +57,8 @@ pub(super) struct GroundItem {
 	pub(super) x: i32,
 	pub(super) y: i32,
 	pub(super) kind: ItemKind,
+	/// The chest it popped out of, so the view can show it flying out
+	pub(super) from: Option<(i32, i32)>,
 }
 
 /// Everything about the player that goes with them from level to level.

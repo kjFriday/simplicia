@@ -191,7 +191,12 @@ impl Catalog {
 				None => (FLOOR, ANY, Vec3::splat(0.7), false, false),
 			};
 			let center = (min + max) / 2.0;
-			let wall_axis_x = size.x <= size.z;
+			// Wall pieces are modeled with their origin on their back. The axis
+			// the origin sits furthest off-center on is the one they stick out
+			// along; if it's near the middle on both, the thinner axis
+			let off_x = center.x.abs() / (size.x / 2.0).max(1e-3);
+			let off_z = center.z.abs() / (size.z / 2.0).max(1e-3);
+			let wall_axis_x = if off_x.max(off_z) > 0.5 { off_x >= off_z } else { size.x <= size.z };
 			// The back is the side nearer the model's own origin
 			let out_positive = if wall_axis_x { min.x.abs() < max.x.abs() } else { min.z.abs() < max.z.abs() };
 			assets.push(Asset {

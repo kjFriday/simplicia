@@ -82,6 +82,13 @@ impl GenSettings {
 	}
 
 	pub(super) fn set(&mut self, i: usize, v: i64) {
+		self.set_unchecked(i, v);
+		self.fit_rooms();
+	}
+
+	/// Sets slider `i`, kept within its range, without fitting the rooms to
+	/// the rest of the settings.
+	fn set_unchecked(&mut self, i: usize, v: i64) {
 		let s = &Self::SLIDERS[i];
 		let v = v.clamp(s.min, s.max);
 		match i {
@@ -95,7 +102,10 @@ impl GenSettings {
 			7 => self.enemies = v as u32,
 			_ => self.items = v as u32,
 		}
-		// Rooms must fit: max at least min, and both well inside the map
+	}
+
+	/// Rooms must fit: max at least min, and both well inside the map.
+	fn fit_rooms(&mut self) {
 		self.room_min = self.room_min.min(self.room_max);
 		let fit = (self.width.min(self.height) as i32 / 2 - 2).max(3);
 		self.room_max = self.room_max.min(fit).max(self.room_min);
@@ -144,13 +154,18 @@ impl Preset {
 		let mut preset = Preset { settings: GenSettings::default(), seed: 0 };
 		for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
 			let (key, value) = line.split_once(' ').ok_or_else(|| format!("bad line: {line}"))?;
-			let value: i64 = value.trim().parse().map_err(|_| format!("bad number: {line}"))?;
+			let value = value.trim();
+			let bad = || format!("bad number: {line}");
+			// Seeds use all 64 bits, so they're read unsigned
 			if key == "seed" {
-				preset.seed = value as u64;
+				preset.seed = value.parse().map_err(|_| bad())?;
 			} else if let Some(i) = GenSettings::SLIDERS.iter().position(|s| s.label.replace(' ', "_") == key) {
-				preset.settings.set(i, value);
+				preset.settings.set_unchecked(i, value.parse().map_err(|_| bad())?);
 			}
 		}
+		// Fitted once everything's in: a value read early can't be checked
+		// against one that comes later
+		preset.settings.fit_rooms();
 		Ok(preset)
 	}
 
@@ -201,5 +216,13 @@ mod tests {
 		let (map, rooms) = preset.settings.layout(preset.seed);
 		assert_eq!(map.x, settings.width);
 		assert!(!rooms.is_empty());
+
+		// Seeds past i64::MAX, and a room min bigger than the default room max
+		let mut big = GenSettings::default();
+		big.set(4, 12);
+		big.set(3, 12);
+		assert_eq!((big.room_min, big.room_max), (12, 12));
+		let big = Preset { settings: big, seed: u64::MAX };
+		assert_eq!(Preset::from_text(&big.to_text()).unwrap(), big);
 	}
 }

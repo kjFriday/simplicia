@@ -1,7 +1,7 @@
 {
   "engine": "generic",
-  "build": { "cmd": "cargo build --bin base" },
-  "launch": { "cmd": "target\\debug\\base.exe", "args": [] },
+  "build": { "cmd": "cargo build --bin debug" },
+  "launch": { "cmd": "target\\debug\\debug.exe", "args": [] },
   "log": { "stdout": true },
   "sourceRoots": ["src"]
 }

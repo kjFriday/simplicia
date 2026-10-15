@@ -25,7 +25,7 @@ fn walls_block_and_turning_works() {
 	let mut world = World::generate(&mut StdRng::seed_from_u64(3), 0).unwrap();
 	// Walk forward until a wall stops us; we must never end up inside one
 	for _ in 0..100 {
-		world.player.act(Action::Forward, &world.map);
+		world.player.act(Action::Forward, &world.map, &world.terrain);
 		assert!(!world.map.is_wall(world.player.x, world.player.y));
 	}
 	let (dx, dy) = world.player.forward();
@@ -33,7 +33,7 @@ fn walls_block_and_turning_works() {
 
 	let facing = world.player.facing;
 	for _ in 0..4 {
-		world.player.act(Action::TurnRight, &world.map);
+		world.player.act(Action::TurnRight, &world.map, &world.terrain);
 	}
 	assert_eq!(world.player.facing, facing);
 }
@@ -128,9 +128,9 @@ fn items_are_picked_up_and_potions_heal_and_gear_toggles() {
 	world.enemies.clear();
 	world.items.clear();
 	let (x, y) = (world.player.x, world.player.y);
-	world.items.push(GroundItem { id: 0, x, y, kind: ItemKind::Potion });
-	world.items.push(GroundItem { id: 1, x, y, kind: ItemKind::Sword });
-	world.items.push(GroundItem { id: 2, x, y, kind: ItemKind::Gold });
+	world.items.push(GroundItem { id: 0, x, y, kind: ItemKind::Potion, from: None });
+	world.items.push(GroundItem { id: 1, x, y, kind: ItemKind::Sword, from: None });
+	world.items.push(GroundItem { id: 2, x, y, kind: ItemKind::Gold, from: None });
 	world.pick_up();
 	assert!(world.items.is_empty());
 	assert_eq!(world.hero.bag, vec![ItemKind::Potion, ItemKind::Sword]);
@@ -154,14 +154,14 @@ fn top_level_has_no_way_up_and_turning_never_triggers_stairs() {
 #[test]
 fn minimap_draws_in_the_top_right_and_reveals_only_nearby_tiles() {
 	let world = World::generate(&mut StdRng::seed_from_u64(2), 0).unwrap();
-	assert!(world.has_seen(world.player.x, world.player.y));
-	assert!(!world.has_seen(world.stairs_down.0, world.stairs_down.1) || {
+	assert!(world.has_seen(world.player.x, world.player.y, false));
+	assert!(!world.has_seen(world.stairs_down.0, world.stairs_down.1, false) || {
 		let (dx, dy) = (world.stairs_down.0 - world.player.x, world.stairs_down.1 - world.player.y);
 		dx.abs() <= REVEAL_RADIUS && dy.abs() <= REVEAL_RADIUS
 	});
 
 	let mut fb = Framebuffer::new(120, 40);
-	minimap::draw(&world, &mut fb, false);
+	minimap::draw(&world, &mut fb, false, false);
 	let row0: String = fb.color_buffer[..120].iter().map(|c| c.ch).collect();
 	assert!(row0.ends_with('┐') && row0.contains("Depth 1"), "{row0}");
 	let arrow = ['▲', '►', '▼', '◄'][world.player.facing];

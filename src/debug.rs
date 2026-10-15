@@ -7,6 +7,8 @@ pub mod history;
 pub mod overworld;
 pub mod quests;
 
+const DEBUG: bool = true;
+
 pub fn main() -> std::io::Result<()> {
 	// Build the first level before opening the window, so a bad model fails fast
 	let state = game::Game::new().map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;

@@ -22,12 +22,14 @@ pub(super) enum Bind {
 	Pause,
 	Map,
 	Inventory,
+	/// Swing your weapon (the left mouse button always does too)
+	Attack,
 }
 
 impl Bind {
 	// Keys are stored in ALL's order and looked up by `bind as usize`, so
 	// ALL must list the variants in declaration order (see the test below)
-	pub(super) const ALL: [Bind; 8] = [
+	pub(super) const ALL: [Bind; 9] = [
 		Bind::Forward,
 		Bind::Back,
 		Bind::TurnLeft,
@@ -36,6 +38,7 @@ impl Bind {
 		Bind::Pause,
 		Bind::Map,
 		Bind::Inventory,
+		Bind::Attack,
 	];
 
 	pub(super) fn label(self) -> &'static str {
@@ -47,6 +50,7 @@ impl Bind {
 			Bind::Pause => "Pause",
 			Bind::Map => "Map",
 			Bind::Inventory => "Inventory",
+			Bind::Attack => "Attack",
 			Bind::Sprint => "Sprint",
 		}
 	}
@@ -60,6 +64,7 @@ impl Bind {
 			Bind::Pause => KeyCode::Escape,
 			Bind::Map => KeyCode::KeyM,
 			Bind::Inventory => KeyCode::KeyE,
+			Bind::Attack => KeyCode::KeyF,
 			Bind::Sprint => KeyCode::ShiftLeft,
 		}
 	}
@@ -90,6 +95,8 @@ pub(super) const MENU_BACK: KeyCode = KeyCode::Escape;
 
 /// Switches between the ASCII and textured views, anywhere.
 pub(super) const TOGGLE_ASCII: KeyCode = KeyCode::F2;
+/// Debug binary: fog of war and darkness on or off.
+pub(super) const TOGGLE_FOG: KeyCode = KeyCode::F3;
 
 /// The level editor (debug binary only).
 pub(super) mod editor {
@@ -162,6 +169,7 @@ pub(super) fn help(key: impl Fn(Bind) -> KeyCode) -> Vec<HelpLine> {
 		Control(format!("{} {}", bound(Bind::TurnLeft), bound(Bind::TurnRight)), "step sideways"),
 		Control(key_name(key(Bind::Sprint)), "hold to sprint"),
 		Control("Mouse".into(), "look around"),
+		Control(format!("Click / {}", key_name(key(Bind::Attack))), "swing: hits what's in front, opens chests"),
 		Control(key_name(key(Bind::Map)), "map: mini / full / off"),
 		Control(key_name(key(Bind::Inventory)), "inventory"),
 		Control(key_name(key(Bind::Pause)), "pause"),
@@ -178,6 +186,7 @@ pub(super) fn help(key: impl Fn(Bind) -> KeyCode) -> Vec<HelpLine> {
 	if crate::game::dev_tools() {
 		lines.extend([
 			Heading("Level editor (debug binary)"),
+			Control(key_name(TOGGLE_FOG), "fog and darkness on / off"),
 			Control(key_name(editor::TOGGLE), "open / close"),
 			Control("WASD Space Ctrl".into(), "fly (Shift: faster)"),
 			Control("Q E / R (Shift: 90°)".into(), "model / turn 15°"),

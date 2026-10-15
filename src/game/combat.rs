@@ -1,6 +1,7 @@
 // Combat: the monsters, their stats, and the turn order once one is close.
 use super::items::SHIELD_BLOCK;
-use super::world::World;
+use super::items::SWORD_BONUS;
+use super::world::{Event, World};
 
 /// The kinds of monster.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -164,6 +165,41 @@ impl World {
 		self.combat = combat;
 	}
 
+	/// Swings at whatever's on the tile in front: an enemy gets hit, a closed
+	/// chest opens. Hitting something in combat takes a turn; a swing at
+	/// nothing doesn't.
+	pub(super) fn attack(&mut self) {
+		self.events.push(Event::Swing);
+		let (dx, dy) = self.player.forward();
+		let (tx, ty) = (self.player.x + dx, self.player.y + dy);
+		if let Some(i) = self.enemy_at(tx, ty) {
+			self.strike(i);
+			if self.combat {
+				self.enemies_act();
+			}
+			self.update_combat();
+		} else if let Some(c) = self.chest_at(tx, ty) {
+			self.open_chest(c);
+		}
+	}
+
+	/// The player hits enemy `i`, killing it if that's its last HP.
+	pub(super) fn strike(&mut self, i: usize) {
+		let e = &self.enemies[i];
+		let name = e.kind.stats().name;
+		let at = self.tile_center_of(e.x, e.y) + glam::Vec3::Y * 0.9;
+		let id = e.id;
+		self.enemies[i].hp -= PLAYER_DAMAGE + if self.hero.sword { SWORD_BONUS } else { 0 };
+		if self.enemies[i].hp <= 0 {
+			self.enemies.remove(i);
+			self.events.push(Event::Kill { at });
+			self.say(format!("You slay the {name}!"));
+		} else {
+			self.events.push(Event::Hit { id, at });
+			self.say(format!("You hit the {name}."));
+		}
+	}
+
 	/// The enemies' turn in combat: each one close by attacks if it's next to
 	/// the player, or else steps toward them, as fast as its kind allows.
 	pub(super) fn enemies_act(&mut self) {
@@ -201,6 +237,7 @@ impl World {
 			self.say(format!("Your shield turns the {} aside.", stats.name));
 		} else {
 			self.hero.hp -= stats.damage;
+			self.events.push(Event::Hurt);
 			self.say(format!("The {} hits you ({} HP).", stats.name, self.hero.hp.max(0)));
 		}
 	}

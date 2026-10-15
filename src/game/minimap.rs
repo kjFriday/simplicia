@@ -30,7 +30,8 @@ const PLAYER_ARROWS: [char; 4] = ['▲', '►', '▼', '◄'];
 /// Draws the map. The minimap is a panel in the top-right corner that shrinks
 /// on small screens and is skipped if it wouldn't leave room to see the
 /// dungeon; ull shows as much of the level as fits, centered.
-pub(super) fn draw(world: &World, buffer: &mut Framebuffer, full: bool) {
+/// With `reveal_all` (fog off) the whole level shows, enemies and all.
+pub(super) fn draw(world: &World, buffer: &mut Framebuffer, full: bool, reveal_all: bool) {
 	let (max_w, max_h, want_w, want_h) = if full {
 		((buffer.width as i32 - 2) / CELLS_PER_TILE, buffer.height as i32 - 2, i32::MAX, i32::MAX)
 	} else {
@@ -78,11 +79,13 @@ pub(super) fn draw(world: &World, buffer: &mut Framebuffer, full: bool) {
 			let (mx, my) = (left + tx, top + ty);
 			let (glyph, rgb) = if (mx, my) == (px, py) {
 				(PLAYER_ARROWS[world.player.facing()], PLAYER)
-			} else if !world.has_seen(mx, my) {
+			} else if !world.has_seen(mx, my, reveal_all) {
 				(' ', FLOOR)
+			} else if let Some(c) = world.chests.iter().find(|c| (c.x, c.y) == (mx, my)) {
+				(if c.open { 'u' } else { 'C' }, STAIRS_DOWN)
 			} else if world.items.iter().any(|it| (it.x, it.y) == (mx, my)) {
 				('$', STAIRS_DOWN)
-			} else if let Some(e) = world.enemies.iter().find(|e| (e.x, e.y) == (mx, my) && world.can_see(mx, my)) {
+			} else if let Some(e) = world.enemies.iter().find(|e| (e.x, e.y) == (mx, my) && world.can_see(mx, my, reveal_all)) {
 				(e.kind.stats().glyph, ENEMY)
 			} else if (mx, my, world.player.z) == world.stairs_down {
 				('>', STAIRS_DOWN)

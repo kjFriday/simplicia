@@ -1,8 +1,9 @@
 // A level: the map, the player in it, and everything placed on it.
 use glam::Vec3;
 
-use super::combat::{Enemy, PLAYER_DAMAGE};
-use super::items::{GroundItem, Hero, SWORD_BONUS};
+use super::chests::Chest;
+use super::combat::Enemy;
+use super::items::{GroundItem, Hero};
 use super::player::{Action, Player};
 use super::terrain::Terrain;
 use crate::dungeons::mapgen::MapGrid;
@@ -41,6 +42,14 @@ pub(super) struct World {
 	pub(super) enemies: Vec<Enemy>,
 	/// Items lying on the floor
 	pub(super) items: Vec<GroundItem>,
+	/// The id the next item gets (items out of chests come after the rest)
+	pub(super) next_item_id: u32,
+	pub(super) chests: Vec<Chest>,
+	/// Index into `meshes` of a closed chest and an open one
+	pub(super) chest_meshes: [usize; 2],
+	/// What happened since the view last looked, for it to show: swings,
+	/// hits, chests opening. The view empties it.
+	pub(super) events: Vec<Event>,
 	/// HP, gold, and carried items
 	pub(super) hero: Hero,
 	/// True while an enemy is close: movement is tile by tile, turn by turn
@@ -80,6 +89,20 @@ pub(super) const TORCH_DEPTH: f32 = 0.3;
 /// How far around the player the minimap uncovers, in tiles.
 pub(super) const REVEAL_RADIUS: i32 = 3;
 
+/// Something the view should show happening.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) enum Event {
+	/// The player swung their weapon
+	Swing,
+	/// An enemy was hit, at `at` (about chest height)
+	Hit { id: u32, at: Vec3 },
+	/// An enemy died there
+	Kill { at: Vec3 },
+	/// The player was hit
+	Hurt,
+	ChestOpened { at: Vec3 },
+}
+
 /// Where a move left the player.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum Arrival {
@@ -94,14 +117,7 @@ impl World {
 	/// debug binary) it shows everything.
 	pub(super) fn has_seen(&self, x: i32, y: i32, reveal_all: bool) -> bool {
 		let on_map = x >= 0 && y >= 0 && (x as usize) < self.map.x && (y as usize) < self.map.y;
-		if reveal_all {
-			return on_map;
-		}
-		x >= 0
-			&& y >= 0
-			&& (x as usize) < self.map.x as usize
-			&& (y as usize) < self.map.y as usize
-			&& self.seen[x as usize * self.map.y as usize + y as usize]
+		on_map && (reveal_all || self.seen[x as usize * self.map.y + y as usize])
 	}
 
 	pub(super) fn reveal_around_player(&mut self) {
@@ -132,6 +148,7 @@ impl World {
 	pub(super) fn walk(&mut self, forward: f32, strafe: f32, dt: f32) -> Option<Arrival> {
 		let before = (self.player.x, self.player.y);
 		self.player.walk(&self.map, &self.blockers, &self.terrain, forward, strafe, dt);
+		self.open_nearby_chests();
 		if (self.player.x, self.player.y) == before {
 			return None;
 		}
@@ -157,21 +174,29 @@ impl World {
 	/// whether they just stepped onto a staircase. In combat, stepping into an
 	/// enemy attacks it, and every step or attack gives the enemies a turn.
 	pub(super) fn act(&mut self, action: Action) -> Option<Arrival> {
+		if action == Action::Attack {
+			self.attack();
+			return None;
+		}
 		if self.combat && matches!(action, Action::Forward | Action::Back) {
 			let (dx, dy) = self.player.forward();
 			let sign = if action == Action::Forward { 1 } else { -1 };
 			let target = (self.player.x + dx * sign, self.player.y + dy * sign);
 			if let Some(i) = self.enemy_at(target.0, target.1) {
-				let name = self.enemies[i].kind.stats().name;
-				self.enemies[i].hp -= PLAYER_DAMAGE + if self.hero.sword { SWORD_BONUS } else { 0 };
-				if self.enemies[i].hp <= 0 {
-					self.enemies.remove(i);
-					self.say(format!("You slay the {name}!"));
-				} else {
-					self.say(format!("You hit the {name}."));
-				}
+				// Walking into an enemy attacks it
+				self.events.push(Event::Swing);
+				self.strike(i);
 				self.enemies_act();
 				self.update_combat();
+				return None;
+			}
+			if let Some(c) = self.chest_at(target.0, target.1) {
+				// Chests can't be walked onto; bumping a closed one opens it
+				if !self.chests[c].open {
+					self.open_chest(c);
+					self.enemies_act();
+					self.update_combat();
+				}
 				return None;
 			}
 		}

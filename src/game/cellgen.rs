@@ -100,10 +100,12 @@ impl CellDraft {
 					}
 				}
 				if self.kind == CellKind::RoomCorner && rng.random_bool(0.4) {
-					// Something small tucked into the corner
+					// Something small tucked into the corner, at an angle
 					let (a, b) = (SIDES[walls[0]], SIDES[walls[1 % walls.len()]]);
-					let at = (a + b) * (WALL_FACE - 0.5);
-					self.stand(pick(rng, &small), at, quarter(rng), None);
+					let at = (a + b) * (WALL_FACE - 0.5 - rng.random_range(0.0..0.3));
+					let asset = pick(rng, &small);
+					let (turns, w) = (quarter(rng), wobble(rng, 30.0));
+					self.stand(asset, at, turns, w, None);
 				}
 			}
 			CellKind::RoomCenter => match rng.random_range(0..10) {
@@ -111,16 +113,23 @@ impl CellDraft {
 				0..=3 => {}
 				// A table (or the like) with seats around it
 				4..=7 => {
-					let turns = quarter(rng);
-					if let Some(table) = self.stand(pick(rng, &holders), Vec3::ZERO, turns, None) {
+					// Off the exact middle, and a little askew
+					let at = Vec3::new(rng.random_range(-0.35..0.35), 0.0, rng.random_range(-0.35..0.35));
+					let asset = pick(rng, &holders);
+					let (turns, w) = (quarter(rng), wobble(rng, 10.0));
+					if let Some(table) = self.stand(asset, at, turns, w, None) {
 						self.seats_around(table, &seats, rng);
 					}
 				}
 				// A carpet, maybe with something on it
 				8 => {
-					self.stand(pick(rng, &carpets), Vec3::ZERO, quarter(rng), None);
+					let asset = pick(rng, &carpets);
+					let (turns, w) = (quarter(rng), wobble(rng, 6.0));
+					self.stand(asset, Vec3::ZERO, turns, w, None);
 					if rng.random_bool(0.5) {
-						self.stand(pick(rng, &holders), Vec3::ZERO, quarter(rng), None);
+						let asset = pick(rng, &holders);
+						let (turns, w) = (quarter(rng), wobble(rng, 10.0));
+						self.stand(asset, Vec3::ZERO, turns, w, None);
 					}
 				}
 				// A chandelier overhead
@@ -153,11 +162,12 @@ impl CellDraft {
 /// Placing things in a draft.
 impl CellDraft {
 	/// Places `asset` with the middle of its footprint at `at` (on the floor
-	/// unless `at.y` says otherwise), turned `turns` quarter turns. Returns
-	/// its index, or None if it doesn't fit.
-	fn stand(&mut self, asset: Option<&Asset>, at: Vec3, turns: u32, parent: Option<usize>) -> Option<usize> {
+	/// unless `at.y` says otherwise), turned `turns` quarter turns and then
+	/// `wobble` radians more, so things don't all sit square. Returns its
+	/// index, or None if it doesn't fit.
+	fn stand(&mut self, asset: Option<&Asset>, at: Vec3, turns: u32, wobble: f32, parent: Option<usize>) -> Option<usize> {
 		let asset = asset?;
-		let yaw = turns as f32 * std::f32::consts::FRAC_PI_2;
+		let yaw = turns as f32 * std::f32::consts::FRAC_PI_2 + wobble;
 		let (w, d) = if turns % 2 == 0 { (asset.size.x, asset.size.z) } else { (asset.size.z, asset.size.x) };
 		let half = Vec3::new(w / 2.0, 0.0, d / 2.0);
 		let (lo, hi) = (at - half, at + half);
@@ -208,8 +218,11 @@ impl CellDraft {
 			Some(_) => -room,
 			None => rng.random_range(-room..=room),
 		};
-		let at = SIDES[side] * (WALL_FACE - depth / 2.0 - 0.02) + along * slide;
-		self.stand(Some(asset), at, turns, None);
+		// Not quite flush, not quite square
+		let gap = 0.02 + rng.random_range(0.0..0.12);
+		let at = SIDES[side] * (WALL_FACE - depth / 2.0 - gap) + along * slide;
+		let w = wobble(rng, 4.0);
+		self.stand(Some(asset), at, turns, w, None);
 	}
 
 	/// Hangs `asset` on the wall on `side` at its own height, back to the wall.
@@ -248,7 +261,9 @@ impl CellDraft {
 		let x = rng.random_range(lo.x + margin..=hi.x - margin);
 		let z = rng.random_range(lo.z + margin..=hi.z - margin);
 		let at = Vec3::new(x, self.tops[holder], z);
-		self.stand(Some(asset), at, quarter(rng), Some(holder));
+		// Small things lie at any angle
+		let w = rng.random_range(0.0..std::f32::consts::TAU);
+		self.stand(Some(asset), at, 0, w, Some(holder));
 	}
 
 	/// Seats (chairs, stools, benches) beside object `table`.
@@ -265,9 +280,11 @@ impl CellDraft {
 				0.0,
 				if SIDES[side].z > 0.0 { hi.z } else if SIDES[side].z < 0.0 { lo.z } else { mid.z },
 			);
-			let at = edge + SIDES[side] * (seat.size.x.max(seat.size.z) / 2.0 + 0.1);
-			// Facing the table
-			self.stand(Some(seat), at, ((side + 2) % 4) as u32, None);
+			// Pulled out by different amounts, turned a little: facing the table
+			let pulled = rng.random_range(0.05..0.35);
+			let at = edge + SIDES[side] * (seat.size.x.max(seat.size.z) / 2.0 + pulled);
+			let w = wobble(rng, 18.0);
+			self.stand(Some(seat), at, ((side + 2) % 4) as u32, w, None);
 		}
 	}
 
@@ -287,6 +304,11 @@ fn model_out(asset: &Asset) -> Vec3 {
 fn turns_facing(asset: &Asset, inward: Vec3) -> u32 {
 	let out = model_out(asset);
 	(0..4).find(|&t| (Quat::from_rotation_y(t as f32 * std::f32::consts::FRAC_PI_2) * out).distance(inward) < 0.1).unwrap_or(0)
+}
+
+/// A random turn of up to `degrees` either way, in radians.
+fn wobble(rng: &mut impl Rng, degrees: f32) -> f32 {
+	rng.random_range(-degrees..=degrees).to_radians()
 }
 
 fn quarter(rng: &mut impl Rng) -> u32 {

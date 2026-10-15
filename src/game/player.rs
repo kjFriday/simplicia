@@ -13,6 +13,8 @@ pub(super) enum Action {
 	Back,
 	TurnLeft,
 	TurnRight,
+	/// Swing at what's in front
+	Attack,
 }
 
 pub(super) struct Player {
@@ -148,6 +150,8 @@ impl Player {
 				self.facing = (self.facing + 1) % 4;
 				true
 			}
+			// The world handles attacks
+			Action::Attack => false,
 		}
 	}
 

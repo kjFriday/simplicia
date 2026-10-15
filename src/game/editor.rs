@@ -468,29 +468,18 @@ pub(super) fn draw_hud(editor: &Editor, buffer: &mut Framebuffer) {
 		return;
 	}
 	const VALUE: [u8; 3] = [255, 220, 90];
+	const HINT: [u8; 3] = [130, 130, 130];
+	// Two lines along the top: what's being placed, and what's happening.
+	// The keys are on the Help screen; the map stays hidden while editing.
 	let model = editor.palette.get(editor.current).copied().unwrap_or("(no models)");
+	let model = model.strip_suffix(".glb").unwrap_or(model);
 	let t = editor.target();
-	let lines = [
-		(format!("EDITOR  model {}/{}: {model}", editor.current + 1, editor.palette.len()), VALUE),
-		(
-			format!(
-				"{}  at {:.2} {:.2} {:.2}  turn {}°  placed {}",
-				editor.file,
-				t.x,
-				t.y,
-				t.z,
-				editor.turn,
-				editor.placed.len()
-			),
-			TEXT,
-		),
-		(editor.status.clone(), TEXT),
-		("Q/E model  R turn  Z/X height  LMB place  RMB remove  B levels  F5 save  F1 exit".into(), TEXT),
-	];
-	let top = buffer.height as i32 - lines.len() as i32;
-	for (i, (text, rgb)) in lines.iter().enumerate() {
-		put_str(buffer, 0, top + i as i32, text, *rgb);
-	}
+	let place = format!("{}/{} {model}  {}°  y {:.2}", editor.current + 1, editor.palette.len(), editor.turn, t.y);
+	put_str(buffer, 0, 0, &place, VALUE);
+	let status = format!("{}  ({} placed)  {}", editor.file, editor.placed.len(), editor.status);
+	put_str(buffer, 0, 1, &status, TEXT);
+	let hint = "Q/E model  R turn  Z/X height  click place  right-click remove  B files  F5 save  F1 exit";
+	put_str(buffer, 0, buffer.height as i32 - 1, hint, HINT);
 }
 
 /// The level browser: the saved prefabs, the open one marked, and "new level".

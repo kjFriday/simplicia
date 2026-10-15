@@ -13,10 +13,11 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use crate::engine::font::{GLYPH_H, GLYPH_W};
 use crate::engine::hud::Cell;
 use crate::engine::icons::Sprites;
-use crate::engine::scene::{model_parts, FAR_PLANE, NEAR_PLANE};
+use crate::engine::scene::{model_parts, ModelParts, FAR_PLANE, NEAR_PLANE};
 use crate::engine::text_filter::{TextFilter, TextFilterPlugin};
 use super::editor::{self, Editor};
 use super::controls::{self, Bind};
+use super::effects::{self, EnemyAnim, Motion};
 use super::menu::{Request, Screen};
 use super::player::{Action, SPRINT_MULTIPLIER};
 use super::portals::{self, PortalKind};
@@ -32,6 +33,15 @@ const TORCH_LUMENS: f32 = 200_000.0;
 const TORCH_RANGE: f32 = 14.0;
 /// Light everywhere, so unlit corners are dim rather than black.
 const AMBIENT: f32 = 50.0;
+/// With the fog off (debug binary, F3): a moderate fill, enough to see the
+/// whole level without washing it out.
+const AMBIENT_NO_FOG: f32 = 350.0;
+/// With the fog on, the distance haze: clear up to FOG_START meters, gone
+/// to darkness by FOG_END.
+const FOG_START: f32 = 8.0;
+const FOG_END: f32 = 30.0;
+const FOG_COLOR: Color = Color::srgb(0.012, 0.011, 0.01);
+
 /// The lantern the player carries: brightness in lumens and reach in meters.
 const LANTERN_LUMENS: f32 = 250_000.0;
 const LANTERN_RANGE: f32 = 16.0;
@@ -46,7 +56,8 @@ pub struct GamePlugin;
 impl Plugin for GamePlugin {
 	fn build(&self, app: &mut App) {
 		app.add_plugins(TextFilterPlugin)
-			.add_systems(Startup, setup)
+			.init_resource::<SpriteCache>()
+			.add_systems(Startup, (setup, effects::setup).chain())
 			.add_systems(
 				Update,
 				(
@@ -54,10 +65,16 @@ impl Plugin for GamePlugin {
 					editor::update.run_if(resource_exists::<Editor>),
 					mouse_look,
 					sync_scene,
+					effects::play_events,
 					sync_enemies,
 					sync_items,
+					sync_chests,
 					portals::animate,
+					apply_fog,
 					sync_camera,
+					effects::animate_weapon,
+					effects::update_particles,
+					effects::ambient_particles,
 					draw_frame,
 				)
 					.chain(),
@@ -75,11 +92,41 @@ struct Scene3d {
 	/// (Game::run, depth) of the level shown
 	shown: Option<(u32, usize)>,
 	entities: Vec<Entity>,
+	/// A closed chest's model and an open one's, for swapping when one opens
+	chest_parts: Vec<ModelParts>,
 }
+
+/// The quads and per-icon materials sprites are drawn with, built once.
+#[derive(Resource, Default)]
+struct SpriteCache(Option<Sprites>);
 
 /// Marks the camera that draws the 3D models under the text.
 #[derive(Component)]
-struct WorldCamera;
+pub(super) struct WorldCamera;
+
+/// Keeps the lighting in step with the fog. On: dim light and a haze that
+/// swallows the distance. Off: a moderate, even light and no haze.
+fn apply_fog(
+	mut commands: Commands,
+	game: Res<Game>,
+	mut ambient: ResMut<GlobalAmbientLight>,
+	cameras: Query<(Entity, Has<DistanceFog>), With<WorldCamera>>,
+) {
+	let brightness = if game.fog { AMBIENT } else { AMBIENT_NO_FOG };
+	if ambient.brightness != brightness {
+		ambient.brightness = brightness;
+	}
+	let Ok((camera, hazy)) = cameras.single() else { return };
+	if game.fog && !hazy {
+		commands.entity(camera).insert(DistanceFog {
+			color: FOG_COLOR,
+			falloff: FogFalloff::Linear { start: FOG_START, end: FOG_END },
+			..default()
+		});
+	} else if !game.fog && hazy {
+		commands.entity(camera).remove::<DistanceFog>();
+	}
+}
 
 /// An enemy's sprite, by the enemy's id.
 #[derive(Component)]
@@ -88,6 +135,24 @@ struct EnemyModel(u32);
 /// An item's sprite, by the item's id.
 #[derive(Component)]
 struct ItemModel(u32);
+
+/// An item flying out of a chest: from where, and since when.
+#[derive(Component)]
+struct Pop {
+	from: Vec3,
+	start: f32,
+}
+
+/// How long an item takes to fly out of a chest, and how high it arcs.
+const POP_TIME: f32 = 0.6;
+const POP_HEIGHT: f32 = 1.4;
+
+/// A part of a chest's model, by the chest's id, and whether it's the open one.
+#[derive(Component)]
+struct ChestModel {
+	id: u32,
+	open: bool,
+}
 
 /// Sprite sizes in meters, and how high items float above the floor.
 const ENEMY_SIZE: f32 = 1.8;
@@ -109,46 +174,123 @@ fn eye_of(cameras: &Query<&Transform, With<WorldCamera>>) -> Vec3 {
 	cameras.single().map(|t| t.translation).unwrap_or_default()
 }
 
-/// Floats each item on its tile, facing the camera; removes the ones picked up.
+/// Floats each item on its tile, facing the camera; removes the ones picked
+/// up, and adds sprites for new ones. Items out of a chest fly out of it in
+/// an arc.
+#[allow(clippy::too_many_arguments)]
 fn sync_items(
 	mut commands: Commands,
-	game: Res<Game>,
+	mut game: ResMut<Game>,
 	time: Res<Time>,
+	mut scene: ResMut<Scene3d>,
+	mut cache: ResMut<SpriteCache>,
+	mut meshes: ResMut<Assets<Mesh>>,
+	mut materials: ResMut<Assets<StandardMaterial>>,
+	mut images: ResMut<Assets<Image>>,
 	cameras: Query<&Transform, With<WorldCamera>>,
-	mut models: Query<(Entity, &ItemModel, &mut Transform), Without<WorldCamera>>,
+	mut models: Query<(Entity, &ItemModel, Option<&Pop>, &mut Transform), Without<WorldCamera>>,
 ) {
-	let world = &game.levels[game.depth];
+	let game = &mut *game;
+	let world = &mut game.levels[game.depth];
 	let eye = eye_of(&cameras);
 	let t = time.elapsed_secs();
-	for (entity, model, mut transform) in &mut models {
+	let mut shown = Vec::new();
+	for (entity, model, pop, mut transform) in &mut models {
 		let Some(item) = world.items.iter().find(|it| it.id == model.0) else {
 			commands.entity(entity).despawn();
 			continue;
 		};
+		shown.push(item.id);
 		let floor = Vec3::from_array(world.tile_center_of(item.x, item.y).to_array());
 		let bob = (t * 2.0 + item.id as f32).sin() * 0.1;
-		*transform = billboard(floor + Vec3::Y * (ITEM_HOVER + bob), ITEM_SIZE, eye);
+		let rest = floor + Vec3::Y * (ITEM_HOVER + bob);
+		let at = match pop {
+			Some(p) => {
+				let k = ((t - p.start) / POP_TIME).clamp(0.0, 1.0);
+				p.from.lerp(rest, k) + Vec3::Y * (std::f32::consts::PI * k).sin() * POP_HEIGHT
+			}
+			None => rest,
+		};
+		*transform = billboard(at, ITEM_SIZE, eye);
+	}
+
+	// Sprites for items that don't have one yet: a new level's, or loot. Loot
+	// flies out of its chest once; after that it just lies there
+	let new: Vec<(u32, u32, Option<Vec3>)> = world
+		.items
+		.iter()
+		.filter(|it| !shown.contains(&it.id))
+		.map(|it| {
+			let lid = it.from.map(|(cx, cy)| Vec3::from_array(world.tile_center_of(cx, cy).to_array()) + Vec3::Y * 0.6);
+			(it.id, it.kind.icon(), lid)
+		})
+		.collect();
+	for it in world.items.iter_mut() {
+		it.from = None;
+	}
+	let sprites = cache.0.get_or_insert_with(|| Sprites::new(&mut meshes));
+	for (id, icon, lid) in new {
+		let sprite = sprites.get(&game.icons, icon, &mut materials, &mut images);
+		let mut entity = commands.spawn((sprite, Transform::from_scale(Vec3::ZERO), ItemModel(id)));
+		if let Some(from) = lid {
+			entity.insert(Pop { from, start: t });
+		}
+		scene.entities.push(entity.id());
 	}
 }
 
-/// Moves each enemy's sprite to its tile, facing the camera, and removes the
-/// sprites of enemies that have died.
+/// Moves each enemy's sprite toward its tile, facing the camera and moving
+/// as if alive (see `effects::animate_enemy`); removes the sprites of
+/// enemies that have died.
 fn sync_enemies(
 	mut commands: Commands,
 	game: Res<Game>,
+	time: Res<Time>,
 	cameras: Query<&Transform, With<WorldCamera>>,
-	mut models: Query<(Entity, &EnemyModel, &mut Transform), Without<WorldCamera>>,
+	mut models: Query<(Entity, &EnemyModel, &mut EnemyAnim, &mut Transform), Without<WorldCamera>>,
 ) {
 	let world = &game.levels[game.depth];
 	let eye = eye_of(&cameras);
-	for (entity, model, mut transform) in &mut models {
+	let (t, dt) = (time.elapsed_secs(), time.delta_secs());
+	for (entity, model, mut anim, mut transform) in &mut models {
 		let Some(enemy) = world.enemies.iter().find(|e| e.id == model.0) else {
 			commands.entity(entity).despawn();
 			continue;
 		};
 		let floor = Vec3::from_array(world.tile_center_of(enemy.x, enemy.y).to_array());
-		*transform = billboard(floor, ENEMY_SIZE, eye);
+		*transform = effects::animate_enemy(&mut anim, floor, |at| billboard(at, ENEMY_SIZE, eye), t, dt);
 	}
+}
+
+/// Swaps a chest's model for the open one when it opens.
+fn sync_chests(
+	mut commands: Commands,
+	game: Res<Game>,
+	mut scene: ResMut<Scene3d>,
+	models: Query<(Entity, &ChestModel)>,
+) {
+	let world = &game.levels[game.depth];
+	for chest in world.chests.iter().filter(|c| c.open) {
+		if !models.iter().any(|(_, m)| m.id == chest.id && !m.open) {
+			continue;
+		}
+		for (entity, m) in &models {
+			if m.id == chest.id {
+				commands.entity(entity).despawn();
+			}
+		}
+		let Some(parts) = scene.chest_parts.get(1).cloned() else { continue };
+		let transform = chest_transform(world, chest);
+		for (mesh, material) in parts {
+			let e = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), transform, ChestModel { id: chest.id, open: true })).id();
+			scene.entities.push(e);
+		}
+	}
+}
+
+fn chest_transform(world: &super::world::World, chest: &super::chests::Chest) -> Transform {
+	let at = Vec3::from_array(world.tile_center_of(chest.x, chest.y).to_array());
+	Transform::from_translation(at).with_rotation(Quat::from_rotation_y(chest.yaw))
 }
 
 /// Respawns the 3D models whenever the player changes level.
@@ -159,13 +301,16 @@ fn sync_scene(
 	mut meshes: ResMut<Assets<Mesh>>,
 	mut materials: ResMut<Assets<StandardMaterial>>,
 	mut images: ResMut<Assets<Image>>,
-	mut sprites: Local<Option<Sprites>>,
+	mut cache: ResMut<SpriteCache>,
 ) {
 	if scene.shown == Some((game.run, game.depth)) {
 		return;
 	}
+	// Some were already removed (dead enemies, picked-up items)
 	for entity in scene.entities.drain(..) {
-		commands.entity(entity).despawn();
+		if let Ok(mut e) = commands.get_entity(entity) {
+			e.despawn();
+		}
 	}
 	scene.shown = Some((game.run, game.depth));
 
@@ -198,16 +343,23 @@ fn sync_scene(
 			.id();
 		scene.entities.push(entity);
 	}
-	// Items and enemies as sprites, tagged with their ids so `sync_items`
-	// and `sync_enemies` can place them and remove them when they're gone
-	let sprites = sprites.get_or_insert_with(|| Sprites::new(&mut meshes));
-	for item in &world.items {
-		let sprite = sprites.get(&game.icons, item.kind.icon(), &mut materials, &mut images);
-		scene.entities.push(commands.spawn((sprite, Transform::default(), ItemModel(item.id))).id());
-	}
+	// Enemies as sprites, tagged with their ids so `sync_enemies` can move
+	// them and remove them when they die. (`sync_items` adds the items.)
+	let sprites = cache.0.get_or_insert_with(|| Sprites::new(&mut meshes));
 	for enemy in &world.enemies {
 		let sprite = sprites.get(&game.icons, enemy.icon, &mut materials, &mut images);
-		scene.entities.push(commands.spawn((sprite, Transform::default(), EnemyModel(enemy.id))).id());
+		let at = Vec3::from_array(world.tile_center_of(enemy.x, enemy.y).to_array());
+		let anim = EnemyAnim { id: enemy.id, pos: at, hurt: -10.0 };
+		scene.entities.push(commands.spawn((sprite, Transform::default(), EnemyModel(enemy.id), anim)).id());
+	}
+	// Chests, closed or open as they were left
+	scene.chest_parts = world.chest_meshes.iter().map(|&m| parts[m].clone()).collect();
+	for chest in &world.chests {
+		let transform = chest_transform(world, chest);
+		for (mesh, material) in scene.chest_parts[chest.open as usize].clone() {
+			let e = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), transform, ChestModel { id: chest.id, open: chest.open })).id();
+			scene.entities.push(e);
+		}
 	}
 	for object in &world.objects {
 		let transform = Transform::from_matrix(Mat4::from_cols_array(&object.transform.to_cols_array()));
@@ -223,6 +375,8 @@ fn sync_scene(
 fn sync_camera(
 	game: Res<Game>,
 	editor: Option<Res<Editor>>,
+	time: Res<Time>,
+	motion: Res<Motion>,
 	mut cameras: Query<&mut Transform, With<WorldCamera>>,
 ) {
 	let Ok(mut transform) = cameras.single_mut() else { return };
@@ -232,6 +386,10 @@ fn sync_camera(
 	}
 	let view = game.levels[game.depth].player.view_matrix();
 	*transform = Transform::from_matrix(Mat4::from_cols_array(&view.inverse().to_cols_array()));
+	// Knocked about for a moment when hurt
+	let shake = effects::shake_offset(&motion, time.elapsed_secs());
+	let shake_translation = transform.rotation * shake;
+	transform.translation += shake_translation;
 }
 
 /// The HUD texture and its sprite, and the 3D scene image and the text filter
@@ -336,6 +494,7 @@ fn setup(
 /// more), and the pause key pauses. The cursor is only locked while playing.
 fn handle_input(
 	keys: Res<ButtonInput<KeyCode>>,
+	buttons: Res<ButtonInput<MouseButton>>,
 	time: Res<Time>,
 	mut game: ResMut<Game>,
 	mut exit: MessageWriter<AppExit>,
@@ -343,6 +502,10 @@ fn handle_input(
 	editor: Option<Res<Editor>>,
 ) {
 	// F2 switches between ASCII and textured views, in menus, play or the editor
+	// F3 (debug binary): fog on or off; the light and the map follow it
+	if crate::game::dev_tools() && keys.just_pressed(controls::TOGGLE_FOG) {
+		game.fog = !game.fog;
+	}
 	if keys.just_pressed(controls::TOGGLE_ASCII) {
 		game.settings.text_filter = !game.settings.text_filter;
 	}
@@ -405,6 +568,12 @@ fn handle_input(
 		game.screen = Screen::Inventory { selected: 0 };
 	} else if keys.just_pressed(game.settings.key(Bind::Map)) {
 		game.settings.map = game.settings.map.next();
+	} else if buttons.just_pressed(MouseButton::Left) || keys.just_pressed(game.settings.key(Bind::Attack)) {
+		if let Err(e) = game.attack() {
+			eprintln!("error: {e}");
+			exit.write(AppExit::error());
+			return;
+		}
 	} else {
 		play_turn(&keys, game, &mut exit, time.delta_secs());
 	}
@@ -489,7 +658,7 @@ fn draw_frame(
 	if cols == 0 || rows == 0 {
 		return;
 	}
-	game.render(cols, rows);
+	game.render(cols, rows, editor.as_ref().is_some_and(|e| e.active));
 	if let Some(editor) = &editor {
 		editor::draw_hud(editor, &mut game.framebuffer);
 	}

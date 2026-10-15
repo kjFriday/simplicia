@@ -3,7 +3,13 @@
 // (src/engine) does the loading and drawing; this module decides what's in
 // the world and what the player can do.
 
-/// Hand-built cells: the pieces rooms and halls are made of.
+/// Every placeable asset, sorted by where it goes and what rooms it suits.
+mod catalog;
+/// Chests, and the loot that pops out of them.
+mod chests;
+/// Generating cells from the catalog at startup.
+mod cellgen;
+/// Cells: the furnished pieces rooms and halls are made of.
 mod cells;
 /// Combat: enemies, damage, and the turn order once one is close.
 mod combat;
@@ -23,6 +29,10 @@ mod minimap;
 mod presets;
 /// Glowing gateways over the staircases.
 mod portals;
+/// Floor heights: raised and sunken rooms, stairs, ledges, and pits.
+mod terrain;
+/// Particles, the swinging weapon, and other things the view shows happening.
+mod effects;
 /// The player: position, view, and movement.
 mod player;
 /// Running the game in a Bevy window: input, the 3D scene, and drawing.
@@ -77,6 +87,12 @@ pub struct Game {
 	/// When set, the first level of the next game uses exactly this seed
 	/// (the Generator screen's Play It)
 	first_seed: Option<u64>,
+	/// Every cell levels are furnished from: the hand-made ones from cells/,
+	/// then the ones generated from the asset catalog at startup
+	cells: Vec<cells::Cell>,
+	/// Fog: darkness, and the map showing only what's been seen. The debug
+	/// binary starts with it off and toggles it with F3.
+	fog: bool,
 }
 
 impl Game {
@@ -93,7 +109,10 @@ impl Game {
 			icons: IconSheet::load()?,
 			presets: presets::Preset::load_all(),
 			first_seed: None,
+			cells: Vec::new(),
+			fog: !dev_tools(),
 		};
+		game.make_cells();
 		game.levels = vec![game.make_level(0)?];
 		Ok(game)
 	}
@@ -125,7 +144,21 @@ impl Game {
 			(presets::GenSettings::default(), rand::random())
 		};
 		let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-		World::generate_with(&mut rng, depth, &settings, &cells::load_all())
+		World::generate_with(&mut rng, depth, &settings, &self.cells)
+	}
+
+	/// The startup stage before any level: loads the hand-made cells, and
+	/// generates the rest from every asset in the catalog.
+	fn make_cells(&mut self) {
+		use rand::SeedableRng;
+		let catalog = catalog::Catalog::load();
+		let mut cells = cells::load_all();
+		let made = cells.len();
+		cells.extend(cellgen::generate(&catalog, &mut rand::rngs::StdRng::seed_from_u64(rand::random())));
+		if dev_tools() {
+			eprintln!("{} assets in the catalog; {} hand-made cells, {} generated", catalog.assets.len(), made, cells.len() - made);
+		}
+		self.cells = cells;
 	}
 
 	/// Saves the Generator screen's level as a preset; says where.
@@ -153,6 +186,12 @@ impl Game {
 	fn act(&mut self, action: Action) -> Result<(), String> {
 		let arrival = self.levels[self.depth].act(action);
 		self.arrive(arrival)
+	}
+
+	/// Swings the weapon at whatever's in front.
+	fn attack(&mut self) -> Result<(), String> {
+		self.levels[self.depth].attack();
+		self.arrive(None)
 	}
 
 	/// Walks freely for `dt` seconds (outside combat); stairs work the same as
@@ -197,19 +236,23 @@ impl Game {
 
 	/// Draws the HUD into a `cols` x `rows` character grid. The 3D view itself
 	/// is rendered by Bevy and turned into text by the filter shader.
-	fn render(&mut self, cols: usize, rows: usize) {
+	/// Draws the HUD. While the level editor is open (`editing`) the map and
+	/// status stay out of its way.
+	fn render(&mut self, cols: usize, rows: usize, editing: bool) {
 		// Reallocate only when the window is resized
 		if cols != self.framebuffer.width || rows != self.framebuffer.height {
 			self.framebuffer = Framebuffer::new(cols, rows);
 		}
 		self.framebuffer.clear();
 		// Menus opened from the main menu cover the whole screen anyway
-		if matches!(self.screen, menu::Screen::Playing | menu::Screen::Paused { .. } | menu::Screen::Inventory { .. }) {
+		let in_game = matches!(self.screen, menu::Screen::Playing | menu::Screen::Paused { .. } | menu::Screen::Inventory { .. });
+		if in_game && !editing {
 			let world = &self.levels[self.depth];
+			let reveal_all = !self.fog;
 			minimap::draw_status(world, &mut self.framebuffer);
 			match self.settings.map {
-				menu::MapView::Mini => minimap::draw(world, &mut self.framebuffer, false),
-				menu::MapView::Full => minimap::draw(world, &mut self.framebuffer, true),
+				menu::MapView::Mini => minimap::draw(world, &mut self.framebuffer, false, reveal_all),
+				menu::MapView::Full => minimap::draw(world, &mut self.framebuffer, true, reveal_all),
 				menu::MapView::Hidden => {}
 			}
 		}
