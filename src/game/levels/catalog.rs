@@ -7,6 +7,9 @@
 // Positions in the catalog are "normalized": every model is measured, and
 // placing one at a point puts the middle of its footprint there with its
 // lowest point on the floor, whatever its own origin is.
+//
+// The game loads it once at startup; cellgen.rs builds cells out of it, and
+// builder.rs measures models with `bounds`.
 use glam::Vec3;
 
 use crate::engine::mesh::Mesh;
@@ -143,7 +146,7 @@ const SKIP: [&str; 6] = ["Torch.", "Steps_Small", "Ivy_", "Plant_Root", "Tree_Br
 
 /// A placeable asset and everything the generator needs to know about it.
 #[derive(Clone, Debug)]
-pub(super) struct Asset {
+pub(crate) struct Asset {
 	/// Path under models/
 	pub(super) model: &'static str,
 	pub(super) mount: Mount,
@@ -164,13 +167,13 @@ pub(super) struct Asset {
 	pub(super) wall_axis_x: bool,
 }
 
-pub(super) struct Catalog {
-	pub(super) assets: Vec<Asset>,
+pub(crate) struct Catalog {
+	pub(crate) assets: Vec<Asset>,
 }
 
 impl Catalog {
 	/// Measures and sorts every model under FOLDERS.
-	pub(super) fn load() -> Self {
+	pub(crate) fn load() -> Self {
 		let mut assets = Vec::new();
 		for &(name, _) in MODEL_FILES {
 			if !name.ends_with(".glb") || !FOLDERS.iter().any(|f| name.starts_with(f)) {

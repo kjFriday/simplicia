@@ -40,12 +40,14 @@ pub(crate) fn slot(ch: char) -> usize {
 	}
 }
 
+/// The decoded font: how much ink each pixel of every glyph has.
 pub(crate) struct GlyphSheet {
 	/// How much each pixel of each glyph is lit, 0 to 255; [slot][row][column]
 	coverage: Vec<[[u8; GLYPH_W]; GLYPH_H]>,
 }
 
 impl GlyphSheet {
+	/// Decodes the built-in font sheet and measures each glyph's ink.
 	pub(crate) fn load() -> Result<Self, String> {
 		let sheet = image::load_from_memory(SHEET_PNG).map_err(|e| format!("font sheet: {e}"))?.to_rgba8();
 		let (w, h) = (sheet.width() as usize, sheet.height() as usize);

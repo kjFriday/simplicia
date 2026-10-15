@@ -19,6 +19,7 @@ pub(crate) struct IconSheet {
 }
 
 impl IconSheet {
+	/// Decodes the built-in icon sheet.
 	pub(crate) fn load() -> Result<Self, String> {
 		let sheet = image::load_from_memory(SHEET_PNG).map_err(|e| format!("icon sheet: {e}"))?.to_rgba8();
 		Ok(Self { width: sheet.width(), rgba: sheet.into_raw() })
@@ -56,6 +57,7 @@ pub(crate) struct Sprites {
 }
 
 impl Sprites {
+	/// Makes the shared quad; materials are added as icons are first used.
 	pub(crate) fn new(meshes: &mut Assets<Mesh>) -> Self {
 		Self { quad: meshes.add(Rectangle::new(1.0, 1.0)), materials: Vec::new() }
 	}

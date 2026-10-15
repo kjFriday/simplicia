@@ -2,56 +2,45 @@
 // dungeon kit, explored freely, and fought through turn by turn. The engine
 // (src/engine) does the loading and drawing; this module decides what's in
 // the world and what the player can do.
+//
+// How it fits together, and a good order to read it in:
+//   1. src/base.rs (or src/debug.rs) makes a `Game` and starts Bevy with
+//      `GamePlugin`.
+//   2. This file: `Game`, which holds every level and what screen is up,
+//      and changes level when the player takes the stairs.
+//   3. play/: the rules. A level (`World`), the player, monsters, items and
+//      chests. Plain Rust with no Bevy in it, so it's easy to test.
+//   4. levels/: how a level is made, stage by stage.
+//   5. ui/: everything drawn as text: menus, the map, the keys.
+//   6. view/: the Bevy side. Each frame it reads the keys, asks `Game` to
+//      act, and shows the result in 3D.
+//   7. editor/: the level editor (F1), in the debug binary only.
+//
+// Visibility: `pub(crate)` items are used across folders; `pub(super)` ones
+// only inside their own folder; the rest only in their own file.
 
-/// Every placeable asset, sorted by where it goes and what rooms it suits.
-mod catalog;
-/// Chests, and the loot that pops out of them.
-mod chests;
-/// Generating cells from the catalog at startup.
-mod cellgen;
-/// Cells: the furnished pieces rooms and halls are made of.
-mod cells;
-/// Combat: enemies, damage, and the turn order once one is close.
-mod combat;
-/// Every key and mouse button, and the help text listing them.
-mod controls;
+/// The rules of play: a level and everything in it.
+mod play;
+/// Making levels: layout, shape, the dungeon kit, furnishing, monsters.
+mod levels;
+/// Everything drawn as text: menus, the map panel, the keys.
+mod ui;
+/// Running the game in a Bevy window: input, the 3D scene, and drawing.
+mod view;
 /// The level editor (F1), in the debug binary.
 mod editor;
-/// Items on the floor, the hero's bag, and using them.
-mod items;
-/// Laying out a level and building it from the dungeon kit.
-mod level_gen;
-/// The main, pause, options, key binds, and inventory menus.
-mod menu;
-/// The map panel and the HP/log readout.
-mod minimap;
-/// Generator settings and saved level presets.
-mod presets;
-/// Glowing gateways over the staircases.
-mod portals;
-/// Floor heights: raised and sunken rooms, stairs, ledges, and pits.
-mod terrain;
-/// Particles, the swinging weapon, and other things the view shows happening.
-mod effects;
-/// The player: position, view, and movement.
-mod player;
-/// Running the game in a Bevy window: input, the 3D scene, and drawing.
-mod window;
-/// A level and moving around it.
-mod world;
-
-#[cfg(test)]
-mod tests;
 
 use bevy::ecs::resource::Resource;
 
 use crate::engine::font::GlyphSheet;
-use crate::engine::icons::IconSheet;
 use crate::engine::hud::Framebuffer;
-use player::Action;
-use world::{Arrival, World};
+use crate::engine::icons::IconSheet;
+use levels::{catalog, cellgen, cells, presets};
+use play::player::Action;
+use play::world::{Arrival, World};
+use ui::{menus, minimap, screen, settings};
 
-pub use window::GamePlugin;
+pub use view::GamePlugin;
 
 /// True in the `debug` binary, which has the level editor (F1) and the Level
 /// Generator, and makes fresh levels from the generator's settings. The
@@ -73,9 +62,9 @@ pub struct Game {
 	/// when the depth is the same
 	run: u32,
 	/// Main menu, playing, or paused
-	screen: menu::Screen,
+	screen: screen::Screen,
 	/// What the options menus set: text size, text filter, key binds
-	settings: menu::Settings,
+	settings: settings::Settings,
 	framebuffer: Framebuffer,
 	glyphs: GlyphSheet,
 	/// The Raven icons enemies and items are drawn with
@@ -103,8 +92,8 @@ impl Game {
 			levels: Vec::new(),
 			depth: 0,
 			run: 0,
-			screen: menu::Screen::MainMenu { selected: 0 },
-			settings: menu::Settings::default(),
+			screen: screen::Screen::MainMenu { selected: 0 },
+			settings: settings::Settings::default(),
 			framebuffer: Framebuffer::new(0, 0),
 			glyphs: GlyphSheet::load()?,
 			icons: IconSheet::load()?,
@@ -218,7 +207,7 @@ impl Game {
 			return false;
 		}
 		self.notice = Some(format!("You died on depth {} with {} gold.", self.depth + 1, hero.gold));
-		self.screen = menu::Screen::MainMenu { selected: 0 };
+		self.screen = screen::Screen::MainMenu { selected: 0 };
 		true
 	}
 
@@ -258,6 +247,8 @@ impl Game {
 		level.hero = hero;
 		level.log = log;
 		level.say(format!("{going} to depth {}.", depth + 1));
+		// Arriving on something picks it up, as stepping onto it would
+		level.pick_up();
 		// Monsters waiting by the stairs start a fight straight away
 		level.update_combat();
 		Ok(())
@@ -277,25 +268,25 @@ impl Game {
 		}
 		// The game shows behind the pause menu and the menus it opens; menus
 		// opened from the main menu cover the whole screen anyway
-		let in_game = matches!(self.screen, menu::Screen::Playing | menu::Screen::Inventory { .. }) || self.screen.paused();
+		let in_game = matches!(self.screen, screen::Screen::Playing | screen::Screen::Inventory { .. }) || self.screen.paused();
 		if in_game {
 			let world = &self.levels[self.depth];
 			let reveal_all = !self.fog;
 			minimap::draw_status(world, &mut self.framebuffer);
 			match self.settings.map {
-				menu::MapView::Mini => minimap::draw(world, &mut self.framebuffer, false, reveal_all),
-				menu::MapView::Full => minimap::draw(world, &mut self.framebuffer, true, reveal_all),
-				menu::MapView::Hidden => {}
+				settings::MapView::Mini => minimap::draw(world, &mut self.framebuffer, false, reveal_all),
+				settings::MapView::Full => minimap::draw(world, &mut self.framebuffer, true, reveal_all),
+				settings::MapView::Hidden => {}
 			}
 		}
-		menu::draw(self.screen, &self.settings, &mut self.framebuffer);
+		menus::draw(self.screen, &self.settings, &mut self.framebuffer);
 		match self.screen {
-			menu::Screen::Inventory { selected } => {
-				menu::draw_inventory(&self.levels[self.depth].hero, selected, &mut self.framebuffer);
+			screen::Screen::Inventory { selected } => {
+				menus::draw_inventory(&self.levels[self.depth].hero, selected, &mut self.framebuffer);
 			}
-			menu::Screen::MainMenu { .. } => {
+			screen::Screen::MainMenu { .. } => {
 				if let Some(notice) = &self.notice {
-					menu::draw_notice(notice, &mut self.framebuffer);
+					menus::draw_notice(notice, &mut self.framebuffer);
 				}
 			}
 			_ => {}

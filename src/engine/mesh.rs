@@ -1,5 +1,6 @@
 // Triangle meshes: the vertex and texture data every model is turned into,
 // and the loaders that read them from bundled .obj and .glb files.
+use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
 
@@ -37,20 +38,6 @@ pub(crate) struct Mesh {
 /// Used when a model gives no color at all.
 const DEFAULT_COLOR: Vec3 = Vec3::ONE;
 
-/// Decodes glTF image `index`, which must be embedded in the .glb's binary chunk.
-fn load_texture(gltf: &gltf::Gltf, index: usize, blob: Option<&[u8]>) -> Result<Texture, String> {
-	let image = gltf.images().nth(index).ok_or("texture image missing")?;
-	let bytes = match image.source() {
-		gltf::image::Source::View { view, .. } => {
-			let blob = blob.ok_or("texture data missing")?;
-			blob.get(view.offset()..view.offset() + view.length()).ok_or("texture data out of range")?
-		}
-		gltf::image::Source::Uri { uri, .. } => return Err(format!("external texture {uri:?} isn't supported")),
-	};
-	let rgba = image::load_from_memory(bytes).map_err(|e| format!("texture: {e}"))?.to_rgba8();
-	Ok(Texture { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() })
-}
-
 impl Mesh {
 	/// Creates an empty mesh container.
 	pub(crate) fn new() -> Self {
@@ -81,7 +68,9 @@ impl Mesh {
 	pub(crate) fn combine(&mut self, other: &Mesh) {
 		let base_index = self.vertices.len();
 		let base_tex = self.textures.len() as u32;
-		self.textures.extend(other.textures.iter().map(|t| Texture { width: t.width, height: t.height, rgba: t.rgba.clone() }));
+		self.textures.extend(
+			other.textures.iter().map(|t| Texture { width: t.width, height: t.height, rgba: t.rgba.clone() }),
+		);
 		self.vertices.extend(other.vertices.iter().map(|&v| Vertex {
 			tex: if v.tex == NO_TEXTURE { NO_TEXTURE } else { v.tex + base_tex },
 			..v
@@ -183,15 +172,10 @@ impl Mesh {
 	pub(crate) fn from_gltf(bytes: &[u8]) -> Result<Self, String> {
 		let gltf = gltf::Gltf::from_slice(bytes).map_err(|e| e.to_string())?;
 		let blob = gltf.blob.as_deref();
-		let buffer_data = |buffer: gltf::Buffer| match buffer.source() {
-			gltf::buffer::Source::Bin => blob,
-			// External .bin files and data URIs aren't supported; .glb keeps everything inside
-			gltf::buffer::Source::Uri(_) => None,
-		};
 
 		let mut mesh = Self::new();
 		// glTF image index -> index into mesh.textures, so shared images load once
-		let mut texture_slots = std::collections::HashMap::new();
+		let mut texture_slots = HashMap::new();
 		let scene = gltf.default_scene().or_else(|| gltf.scenes().next()).ok_or("file has no scene")?;
 		let mut stack: Vec<(gltf::Node, Mat4)> = scene.nodes().map(|n| (n, Mat4::IDENTITY)).collect();
 
@@ -201,69 +185,7 @@ impl Mesh {
 
 			let Some(node_mesh) = node.mesh() else { continue };
 			for primitive in node_mesh.primitives() {
-				if primitive.mode() != gltf::mesh::Mode::Triangles {
-					continue;
-				}
-				let reader = primitive.reader(buffer_data);
-				let Some(positions) = reader.read_positions() else { continue };
-
-				// The base color texture paints the model. Some packs leave the base
-				// color black and put the art in the emissive texture instead; use
-				// that when it's all there is.
-				let material = primitive.material();
-				let pbr = material.pbr_metallic_roughness();
-				let (texture, tint) = match (pbr.base_color_texture(), material.emissive_texture()) {
-					(Some(t), _) => (Some(t), Vec3::from_slice(&pbr.base_color_factor()[..3])),
-					(None, Some(t)) => (Some(t), Vec3::from_array(material.emissive_factor())),
-					(None, None) => (None, Vec3::from_slice(&pbr.base_color_factor()[..3])),
-				};
-				let tex = match &texture {
-					Some(info) => {
-						let image = info.texture().source().index();
-						match texture_slots.get(&image) {
-							Some(&slot) => slot,
-							None => {
-								// A texture we can't read (e.g. a separate file) leaves the model flat-colored
-								let slot = match load_texture(&gltf, image, blob) {
-									Ok(t) => {
-										mesh.textures.push(t);
-										mesh.textures.len() as u32 - 1
-									}
-									Err(_) => NO_TEXTURE,
-								};
-								texture_slots.insert(image, slot);
-								slot
-							}
-						}
-					}
-					None => NO_TEXTURE,
-				};
-				let mut uvs = texture.as_ref().and_then(|t| reader.read_tex_coords(t.tex_coord())).map(|c| c.into_f32());
-				let mut colors = reader.read_colors(0).map(|c| c.into_rgb_f32());
-
-				let base = mesh.vertices.len();
-				for p in positions {
-					let vertex_color = colors.as_mut().and_then(|c| c.next()).map(Vec3::from_array).unwrap_or(Vec3::ONE);
-					let uv = uvs.as_mut().and_then(|c| c.next()).map(Vec2::from_array);
-					let pos = transform.transform_point3(Vec3::from_array(p));
-					match uv {
-						Some(uv) => mesh.add_textured_vertex(pos, vertex_color * tint, uv, tex),
-						None => mesh.add_vertex(pos, vertex_color * tint),
-					};
-				}
-				let count = mesh.vertices.len() - base;
-
-				// Primitives without indices draw their vertices in order
-				let indices: Vec<usize> = match reader.read_indices() {
-					Some(idx) => idx.into_u32().map(|i| i as usize).collect(),
-					None => (0..count).collect(),
-				};
-				for tri in indices.chunks_exact(3) {
-					if tri.iter().any(|&i| i >= count) {
-						return Err("triangle index out of range".into());
-					}
-					mesh.add_triangle(base + tri[0], base + tri[1], base + tri[2]);
-				}
+				mesh.add_gltf_primitive(&gltf, blob, &primitive, transform, &mut texture_slots)?;
 			}
 		}
 		Ok(mesh)
@@ -325,122 +247,133 @@ impl Mesh {
 
 		mesh
 	}
+
+	// ---------------------------------------------------------------
+	// glTF helpers, used by `from_gltf`
+	// ---------------------------------------------------------------
+
+	/// Adds one glTF primitive, placed by `transform`. Anything that isn't a
+	/// triangle list, or has no positions, is skipped.
+	fn add_gltf_primitive(
+		&mut self,
+		gltf: &gltf::Gltf,
+		blob: Option<&[u8]>,
+		primitive: &gltf::Primitive,
+		transform: Mat4,
+		texture_slots: &mut HashMap<usize, u32>,
+	) -> Result<(), String> {
+		if primitive.mode() != gltf::mesh::Mode::Triangles {
+			return Ok(());
+		}
+		let reader = primitive.reader(|buffer| gltf_buffer_data(buffer, blob));
+		let Some(positions) = reader.read_positions() else { return Ok(()) };
+
+		let material = primitive.material();
+		let (texture, tint) = primitive_texture(&material);
+		let tex = match &texture {
+			Some(info) => self.gltf_texture_slot(gltf, blob, texture_slots, info.texture().source().index()),
+			None => NO_TEXTURE,
+		};
+		let mut uvs = texture.as_ref().and_then(|t| reader.read_tex_coords(t.tex_coord())).map(|c| c.into_f32());
+		let mut colors = reader.read_colors(0).map(|c| c.into_rgb_f32());
+
+		let base = self.vertices.len();
+		for p in positions {
+			let vertex_color =
+				colors.as_mut().and_then(|c| c.next()).map(Vec3::from_array).unwrap_or(Vec3::ONE);
+			let uv = uvs.as_mut().and_then(|c| c.next()).map(Vec2::from_array);
+			let pos = transform.transform_point3(Vec3::from_array(p));
+			match uv {
+				Some(uv) => self.add_textured_vertex(pos, vertex_color * tint, uv, tex),
+				None => self.add_vertex(pos, vertex_color * tint),
+			};
+		}
+		let count = self.vertices.len() - base;
+
+		// Primitives without indices draw their vertices in order
+		let indices: Vec<usize> = match reader.read_indices() {
+			Some(idx) => idx.into_u32().map(|i| i as usize).collect(),
+			None => (0..count).collect(),
+		};
+		self.add_primitive_triangles(base, count, &indices)
+	}
+
+	/// Where glTF image `image` sits in `textures`, loading it the first time
+	/// it's used. `NO_TEXTURE` if it can't be loaded.
+	fn gltf_texture_slot(
+		&mut self,
+		gltf: &gltf::Gltf,
+		blob: Option<&[u8]>,
+		texture_slots: &mut HashMap<usize, u32>,
+		image: usize,
+	) -> u32 {
+		match texture_slots.get(&image) {
+			Some(&slot) => slot,
+			None => {
+				// A texture we can't read (e.g. a separate file) leaves the model flat-colored
+				let slot = match load_texture(gltf, image, blob) {
+					Ok(t) => {
+						self.textures.push(t);
+						self.textures.len() as u32 - 1
+					}
+					Err(_) => NO_TEXTURE,
+				};
+				texture_slots.insert(image, slot);
+				slot
+			}
+		}
+	}
+
+	/// Adds a primitive's triangles. `indices` count from `base`, the primitive's
+	/// first vertex, and must stay below `count`, its number of vertices.
+	fn add_primitive_triangles(&mut self, base: usize, count: usize, indices: &[usize]) -> Result<(), String> {
+		for tri in indices.chunks_exact(3) {
+			if tri.iter().any(|&i| i >= count) {
+				return Err("triangle index out of range".into());
+			}
+			self.add_triangle(base + tri[0], base + tri[1], base + tri[2]);
+		}
+		Ok(())
+	}
+}
+
+/// The bytes of a glTF buffer. Only the .glb's own binary chunk is available.
+fn gltf_buffer_data<'s>(buffer: gltf::Buffer, blob: Option<&'s [u8]>) -> Option<&'s [u8]> {
+	match buffer.source() {
+		gltf::buffer::Source::Bin => blob,
+		// External .bin files and data URIs aren't supported; .glb keeps everything inside
+		gltf::buffer::Source::Uri(_) => None,
+	}
+}
+
+/// The texture that paints a material, if any, and the color that tints it.
+fn primitive_texture<'a>(material: &gltf::Material<'a>) -> (Option<gltf::texture::Info<'a>>, Vec3) {
+	// The base color texture paints the model. Some packs leave the base
+	// color black and put the art in the emissive texture instead; use
+	// that when it's all there is.
+	let pbr = material.pbr_metallic_roughness();
+	match (pbr.base_color_texture(), material.emissive_texture()) {
+		(Some(t), _) => (Some(t), Vec3::from_slice(&pbr.base_color_factor()[..3])),
+		(None, Some(t)) => (Some(t), Vec3::from_array(material.emissive_factor())),
+		(None, None) => (None, Vec3::from_slice(&pbr.base_color_factor()[..3])),
+	}
+}
+
+/// Decodes glTF image `index`, which must be embedded in the .glb's binary chunk.
+fn load_texture(gltf: &gltf::Gltf, index: usize, blob: Option<&[u8]>) -> Result<Texture, String> {
+	let image = gltf.images().nth(index).ok_or("texture image missing")?;
+	let bytes = match image.source() {
+		gltf::image::Source::View { view, .. } => {
+			let blob = blob.ok_or("texture data missing")?;
+			blob.get(view.offset()..view.offset() + view.length()).ok_or("texture data out of range")?
+		}
+		gltf::image::Source::Uri { uri, .. } => {
+			return Err(format!("external texture {uri:?} isn't supported"));
+		}
+	};
+	let rgba = image::load_from_memory(bytes).map_err(|e| format!("texture: {e}"))?.to_rgba8();
+	Ok(Texture { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() })
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-
-	/// Triangles as corner positions, so tests don't depend on how a loader numbers vertices.
-	fn triangles(mesh: &Mesh) -> Vec<[Vec3; 3]> {
-		mesh.indices.iter().map(|t| t.map(|i| mesh.vertices[i].pos)).collect()
-	}
-
-	#[test]
-	fn cube_matches_old_hardcoded_data_and_has_vertex_colors() {
-		let old = [
-			Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, -1.0, -1.0),
-			Vec3::new(1.0, 1.0, -1.0), Vec3::new(-1.0, 1.0, -1.0),
-			Vec3::new(-1.0, -1.0, 1.0), Vec3::new(1.0, -1.0, 1.0),
-			Vec3::new(1.0, 1.0, 1.0), Vec3::new(-1.0, 1.0, 1.0),
-		];
-		let old_tris: Vec<[Vec3; 3]> = [
-			[0, 1, 2], [0, 2, 3], [5, 4, 7], [5, 7, 6], [3, 2, 6], [3, 6, 7],
-			[4, 5, 1], [4, 1, 0], [1, 5, 6], [1, 6, 2], [4, 0, 3], [4, 3, 7],
-		]
-		.iter()
-		.map(|t: &[usize; 3]| t.map(|i| old[i]))
-		.collect();
-
-		let cube = Mesh::load("cube.obj").unwrap();
-		assert_eq!(triangles(&cube), old_tris);
-		assert!(cube.vertices.iter().any(|v| v.color != DEFAULT_COLOR));
-	}
-
-	#[test]
-	fn pyramid_takes_colors_from_its_mtl() {
-		let pyramid = Mesh::load("pyramid.obj").unwrap();
-		assert_eq!(pyramid.indices.len(), 6);
-		assert!(pyramid.vertices.iter().all(|v| v.color != DEFAULT_COLOR));
-	}
-
-	#[test]
-	fn obj_without_colors_is_white() {
-		let mesh = Mesh::from_obj(b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", "t.obj").unwrap();
-		assert!(mesh.vertices.iter().all(|v| v.color == DEFAULT_COLOR));
-	}
-
-	/// Builds a minimal one-triangle .glb in memory: a red material and a node moved +2 on X.
-	fn tiny_glb() -> Vec<u8> {
-		let mut bin = Vec::new();
-		for f in [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
-			bin.extend_from_slice(&f.to_le_bytes());
-		}
-		let json = r#"{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
-			"nodes":[{"mesh":0,"translation":[2,0,0]}],
-			"meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],
-			"materials":[{"pbrMetallicRoughness":{"baseColorFactor":[1,0,0,1]}}],
-			"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}],
-			"bufferViews":[{"buffer":0,"byteLength":36}],
-			"buffers":[{"byteLength":36}]}"#;
-		let mut json = json.as_bytes().to_vec();
-		while json.len() % 4 != 0 {
-			json.push(b' ');
-		}
-
-		let mut glb = Vec::new();
-		let total = 12 + 8 + json.len() + 8 + bin.len();
-		glb.extend_from_slice(b"glTF");
-		glb.extend_from_slice(&2u32.to_le_bytes());
-		glb.extend_from_slice(&(total as u32).to_le_bytes());
-		glb.extend_from_slice(&(json.len() as u32).to_le_bytes());
-		glb.extend_from_slice(b"JSON");
-		glb.extend_from_slice(&json);
-		glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
-		glb.extend_from_slice(b"BIN\0");
-		glb.extend_from_slice(&bin);
-		glb
-	}
-
-	#[test]
-	fn glb_loads_geometry_transform_and_material_color() {
-		let mesh = Mesh::from_gltf(&tiny_glb()).unwrap();
-		assert_eq!(mesh.indices, vec![[0, 1, 2]]);
-		assert_eq!(mesh.vertices[1].pos, Vec3::new(3.0, 0.0, 0.0));
-		assert!(mesh.vertices.iter().all(|v| v.color == Vec3::new(1.0, 0.0, 0.0)));
-	}
-
-	#[test]
-	fn fit_to_radius_centers_and_scales() {
-		let mut cube = Mesh::load("cube.obj").unwrap();
-		cube.fit_to_radius(1.0);
-		let far = cube.vertices.iter().map(|v| v.pos.length()).fold(0.0, f32::max);
-		assert!((far - 1.0).abs() < 1e-5);
-	}
-
-	#[test]
-	fn wall_model_gets_its_emissive_texture() {
-		let wall = Mesh::load("terrain/canyon/SM_AP_Cube_4m_0.glb").unwrap();
-		assert_eq!(wall.textures.len(), 1);
-		assert!(wall.vertices.iter().all(|v| v.tex == 0));
-		// Not black: the emissive factor tints it, not the black base color
-		assert!(wall.vertices.iter().all(|v| v.color == Vec3::ONE));
-	}
-
-	#[test]
-	fn every_bundled_model_loads() {
-		let failures: Vec<String> = super::super::models::MODEL_FILES
-			.iter()
-			.filter(|(n, _)| n.ends_with(".obj") || n.ends_with(".glb"))
-			.filter_map(|(n, _)| Mesh::load(n).err())
-			.collect();
-		assert!(failures.is_empty(), "{}", failures.join("\n"));
-	}
-
-	#[test]
-	fn load_errors_are_reported() {
-		assert!(Mesh::load("missing.obj").is_err());
-		assert!(Mesh::from_obj(b"v 0 0 0\nf 1 2 3\n", "t.obj").is_err());
-		assert!(Mesh::from_gltf(b"not a glb").is_err());
-	}
-}
+mod tests;

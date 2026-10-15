@@ -1,14 +1,28 @@
 // The player: where they stand, which way they look, and how they move,
 // either tile by tile (in combat) or freely.
+//
+// `World` (world.rs) owns the `Player` and calls in here to move them; the
+// floor heights come from terrain.rs. view/ turns key presses into an
+// `Action` and asks for `view_matrix` to place the camera.
 use glam::{Mat4, Vec3};
 
-use super::world::{tile_center, Blocker, DIRECTIONS, EYE_HEIGHT, TILE, WALL_THICKNESS};
 use super::terrain::{Terrain, STEP_HEIGHT};
+use super::world::{tile_center, Blocker, DIRECTIONS, EYE_HEIGHT, TILE, WALL_THICKNESS};
 use crate::dungeons::mapgen::MapGrid;
+
+/// Furthest you can look up or down.
+pub(crate) const MAX_PITCH: f32 = 80.0 * std::f32::consts::PI / 180.0;
+
+/// Free walking speed, meters per second.
+pub(crate) const WALK_SPEED: f32 = 5.0;
+/// Holding Sprint multiplies the walking speed by this.
+pub(crate) const SPRINT_MULTIPLIER: f32 = 1.5;
+/// How close the player's center can get to a wall, in meters.
+pub(crate) const PLAYER_RADIUS: f32 = 0.6;
 
 /// What the player can do in one turn. The window maps keys to these.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub(super) enum Action {
+pub(crate) enum Action {
 	Forward,
 	Back,
 	TurnLeft,
@@ -17,46 +31,36 @@ pub(super) enum Action {
 	Attack,
 }
 
-pub(super) struct Player {
-	pub(super) x: i32,
-	pub(super) y: i32,
-	pub(super) z: i32,
+pub(crate) struct Player {
+	pub(crate) x: i32,
+	pub(crate) y: i32,
+	pub(crate) z: i32,
 	/// Index into DIRECTIONS: 0 north, 1 east, 2 south, 3 west
-	pub(super) facing: usize,
+	pub(crate) facing: usize,
 	/// Mouselook, in radians, on top of `facing`. Yaw stays within ±45°: past
 	/// that, `facing` turns to the nearer direction so W walks where you look.
-	pub(super) look_yaw: f32,
-	pub(super) look_pitch: f32,
+	pub(crate) look_yaw: f32,
+	pub(crate) look_pitch: f32,
 	/// Where the feet are, in world space. In combat it's always the center of
 	/// tile (x, y); walking freely it can be anywhere, and (x, y) is the tile
 	/// it's in.
-	pub(super) pos: Vec3,
+	pub(crate) pos: Vec3,
 }
 
-/// Furthest you can look up or down.
-pub(super) const MAX_PITCH: f32 = 80.0 * std::f32::consts::PI / 180.0;
-
-/// Free walking speed, meters per second.
-pub(super) const WALK_SPEED: f32 = 5.0;
-/// Holding Sprint multiplies the walking speed by this.
-pub(super) const SPRINT_MULTIPLIER: f32 = 1.5;
-/// How close the player's center can get to a wall, in meters.
-pub(super) const PLAYER_RADIUS: f32 = 0.6;
-
 impl Player {
-	pub(super) fn new(x: i32, y: i32, z: i32) -> Self {
+	pub(crate) fn new(x: i32, y: i32, z: i32) -> Self {
 		Self { x, y, z, facing: 0, look_yaw: 0.0, look_pitch: 0.0, pos: tile_center(x, y) }
 	}
 
 	/// Where the player looks, flat on the floor: the facing turned by mouselook.
-	pub(super) fn heading(&self) -> Vec3 {
+	pub(crate) fn heading(&self) -> Vec3 {
 		let (dx, dy) = self.forward();
 		glam::Quat::from_rotation_y(-self.look_yaw) * Vec3::new(dx as f32, 0.0, dy as f32)
 	}
 
 	/// Puts the feet back in the middle of the current tile and squares the
 	/// view to the facing, for turn-by-turn play.
-	pub(super) fn snap_to_tile(&mut self, terrain: &Terrain) {
+	pub(crate) fn snap_to_tile(&mut self, terrain: &Terrain) {
 		self.pos = tile_center(self.x, self.y) + Vec3::Y * terrain.tile(self.x, self.y);
 		self.look_yaw = 0.0;
 	}
@@ -65,7 +69,7 @@ impl Player {
 	/// the `blockers` (door frames, torches). Wall panels' faces stand
 	/// WALL_THICKNESS inside the rock tiles' edges, so walls count as that
 	/// much closer.
-	pub(super) fn blocked(map: &MapGrid, blockers: &[Blocker], pos: Vec3) -> bool {
+	pub(crate) fn blocked(map: &MapGrid, blockers: &[Blocker], pos: Vec3) -> bool {
 		let r = PLAYER_RADIUS;
 		let w = PLAYER_RADIUS + WALL_THICKNESS;
 		let in_wall = [(-w, -w), (w, -w), (-w, w), (w, w)].iter().any(|(ox, oz)| {
@@ -79,14 +83,23 @@ impl Player {
 	/// Walks freely for `dt` seconds: `forward` and `strafe` are -1 to 1.
 	/// Each axis moves on its own, so the player slides along walls. The feet
 	/// follow the floor up and down; a rise or drop bigger than a step blocks.
-	pub(super) fn walk(&mut self, map: &MapGrid, blockers: &[Blocker], terrain: &Terrain, forward: f32, strafe: f32, dt: f32) {
+	pub(crate) fn walk(
+		&mut self,
+		map: &MapGrid,
+		blockers: &[Blocker],
+		terrain: &Terrain,
+		forward: f32,
+		strafe: f32,
+		dt: f32,
+	) {
 		let ahead = self.heading();
 		let right = Vec3::new(-ahead.z, 0.0, ahead.x);
 		let step = (ahead * forward + right * strafe).normalize_or_zero() * WALK_SPEED * dt;
 		// Blockers the player already stands in (snapped onto a chest's tile
 		// when combat started, say) don't hold them, so they can walk out
 		let start = self.pos;
-		let solid: Vec<Blocker> = blockers.iter().filter(|b| !b.touches(start, PLAYER_RADIUS)).copied().collect();
+		let solid: Vec<Blocker> =
+			blockers.iter().filter(|b| !b.touches(start, PLAYER_RADIUS)).copied().collect();
 		for axis in [Vec3::X, Vec3::Z] {
 			let next = self.pos + step * axis;
 			let climb = (terrain.at(next) - terrain.at(self.pos)).abs();
@@ -101,7 +114,7 @@ impl Player {
 
 	/// Turns the view by mouse movement, in radians. Positive yaw turns right,
 	/// positive pitch looks up.
-	pub(super) fn look(&mut self, yaw: f32, pitch: f32) {
+	pub(crate) fn look(&mut self, yaw: f32, pitch: f32) {
 		use std::f32::consts::FRAC_PI_2;
 		self.look_yaw += yaw;
 		self.look_pitch = (self.look_pitch + pitch).clamp(-MAX_PITCH, MAX_PITCH);
@@ -116,20 +129,22 @@ impl Player {
 	}
 
 	/// 0 north, 1 east, 2 south, 3 west
-	pub(super) fn facing(&self) -> usize {
+	pub(crate) fn facing(&self) -> usize {
 		self.facing
 	}
 
-	pub(super) fn forward(&self) -> (i32, i32) {
+	/// One tile ahead, as a step in map space.
+	pub(crate) fn forward(&self) -> (i32, i32) {
 		DIRECTIONS[self.facing]
 	}
 
 	/// Where the eye is, in world space.
-	pub(super) fn eye(&self) -> Vec3 {
+	pub(crate) fn eye(&self) -> Vec3 {
 		self.pos + Vec3::new(0.0, EYE_HEIGHT, 0.0)
 	}
 
-	pub(super) fn view_matrix(&self) -> Mat4 {
+	/// The camera transform for looking out of the player's eyes.
+	pub(crate) fn view_matrix(&self) -> Mat4 {
 		// Map east (+X) is to the right of north (-Z), so turning right is a
 		// negative rotation about +Y
 		let dir = self.heading();
@@ -139,7 +154,7 @@ impl Player {
 
 	/// One action, one turn. Walls, and rises too high to step, block movement.
 	/// Returns true if the player did something.
-	pub(super) fn act(&mut self, action: Action, map: &MapGrid, terrain: &Terrain) -> bool {
+	pub(crate) fn act(&mut self, action: Action, map: &MapGrid, terrain: &Terrain) -> bool {
 		match action {
 			Action::Forward => self.step(map, terrain, 1),
 			Action::Back => self.step(map, terrain, -1),
@@ -156,7 +171,9 @@ impl Player {
 		}
 	}
 
-	pub(super) fn step(&mut self, map: &MapGrid, terrain: &Terrain, sign: i32) -> bool {
+	/// One tile forward (`sign` 1) or back (`sign` -1), if nothing blocks it.
+	/// Returns true if the player moved.
+	pub(crate) fn step(&mut self, map: &MapGrid, terrain: &Terrain, sign: i32) -> bool {
 		let (dx, dy) = self.forward();
 		let (nx, ny) = (self.x + dx * sign, self.y + dy * sign);
 		if map.is_wall(nx, ny) || !terrain.can_step((self.x, self.y), (nx, ny)) {

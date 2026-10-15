@@ -22,10 +22,12 @@ pub(crate) struct Framebuffer {
 }
 
 impl Framebuffer {
+	/// A grid of `width` x `height` empty cells.
 	pub(crate) fn new(width: usize, height: usize) -> Self {
 		Self { width, height, color_buffer: vec![EMPTY_CELL; width * height] }
 	}
 
+	/// Empties every cell, making the whole grid see-through again.
 	pub(crate) fn clear(&mut self) {
 		self.color_buffer.fill(EMPTY_CELL);
 	}
@@ -38,6 +40,8 @@ pub(crate) fn put(buffer: &mut Framebuffer, x: i32, y: i32, ch: char, rgb: [u8; 
 	}
 }
 
+/// Writes `text` left to right from (`x`, `y`), one character per cell.
+/// Characters that run off the grid are ignored.
 pub(crate) fn put_str(buffer: &mut Framebuffer, x: i32, y: i32, text: &str, rgb: [u8; 3]) {
 	for (i, ch) in text.chars().enumerate() {
 		put(buffer, x + i as i32, y, ch, rgb);

@@ -3,30 +3,65 @@
 //     drifting embers by the lights, dust around the player, and a shimmer
 //     of motes around monsters.
 //   - The weapon in the player's hand (a sword once equipped, a knife till
-//     then), which swings on every attack and bobs while walking.
+//     then), which swings on every attack and bobs while walking. It lives
+//     in weapon.rs; `setup` here hangs it on the camera, and `Motion` says
+//     when it last swung.
 //   - A shake of the view when the player is hurt.
 // The world reports what happened as `Event`s; `play_events` turns them
 // into effects.
-use std::f32::consts::{FRAC_PI_2, PI};
-
 use bevy::prelude::*;
 use rand::RngExt;
 
-use super::editor::Editor;
-use super::window::WorldCamera;
-use super::world::Event;
-use super::Game;
-use crate::engine::mesh::Mesh as ModelMesh;
-use crate::engine::scene::model_parts;
+use crate::game::play::world::Event;
+use crate::game::ui::screen::Screen;
+use crate::game::Game;
+use super::weapon;
+use super::WorldCamera;
 
 /// Most particles alive at once; ambient ones stop spawning past this.
 const MAX_PARTICLES: usize = 600;
 /// How long a weapon swing takes, and a hurt shake lasts, in seconds.
-const SWING_TIME: f32 = 0.3;
+pub(super) const SWING_TIME: f32 = 0.3;
 const SHAKE_TIME: f32 = 0.35;
 const SHAKE_SIZE: f32 = 0.08;
 /// How far from the player ambient particles appear, in meters.
 const AMBIENT_REACH: f32 = 18.0;
+
+/// When the current swing and hurt-shake started, in seconds since startup.
+#[derive(Resource)]
+pub(super) struct Motion {
+	pub(super) swing: f32,
+	shake: f32,
+}
+
+/// Startup: the particle assets, and the two weapons, held by the camera.
+pub(super) fn setup(
+	mut commands: Commands,
+	mut meshes: ResMut<Assets<Mesh>>,
+	mut materials: ResMut<Assets<StandardMaterial>>,
+	mut images: ResMut<Assets<Image>>,
+	cameras: Query<Entity, With<WorldCamera>>,
+) {
+	let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
+	let spark_materials = Spark::ALL
+		.iter()
+		.map(|s| {
+			let color = s.color();
+			materials.add(StandardMaterial {
+				base_color: color,
+				emissive: color.to_linear() * if *s == Spark::Dust { 0.5 } else { 3.0 },
+				unlit: true,
+				alpha_mode: AlphaMode::Add,
+				..default()
+			})
+		})
+		.collect();
+	commands.insert_resource(EffectAssets { cube, materials: spark_materials });
+	commands.insert_resource(Motion { swing: -10.0, shake: -10.0 });
+
+	let Ok(camera) = cameras.single() else { return };
+	weapon::spawn(&mut commands, &mut meshes, &mut materials, &mut images, camera);
+}
 
 // ---------------------------------------------------------------------------
 // Particles
@@ -83,10 +118,21 @@ impl EffectAssets {
 }
 
 /// Spawns `count` particles flying out from `at` at up to `speed` m/s.
-pub(super) fn burst(commands: &mut Commands, assets: &EffectAssets, at: Vec3, spark: Spark, count: usize, speed: f32, gravity: f32, life: f32) {
+#[allow(clippy::too_many_arguments)]
+pub(super) fn burst(
+	commands: &mut Commands,
+	assets: &EffectAssets,
+	at: Vec3,
+	spark: Spark,
+	count: usize,
+	speed: f32,
+	gravity: f32,
+	life: f32,
+) {
 	let mut rng = rand::rng();
 	for _ in 0..count {
-		let dir = Vec3::new(rng.random_range(-1.0..1.0), rng.random_range(-0.2..1.0), rng.random_range(-1.0..1.0)).normalize_or_zero();
+		let dir = Vec3::new(rng.random_range(-1.0..1.0), rng.random_range(-0.2..1.0), rng.random_range(-1.0..1.0))
+			.normalize_or_zero();
 		let vel = dir * speed * rng.random_range(0.4..1.0);
 		let size = rng.random_range(0.04..0.09);
 		spawn_particle(commands, assets, at, spark, vel, gravity, life * rng.random_range(0.6..1.0), size);
@@ -94,7 +140,16 @@ pub(super) fn burst(commands: &mut Commands, assets: &EffectAssets, at: Vec3, sp
 }
 
 #[allow(clippy::too_many_arguments)]
-fn spawn_particle(commands: &mut Commands, assets: &EffectAssets, at: Vec3, spark: Spark, vel: Vec3, gravity: f32, life: f32, size: f32) {
+fn spawn_particle(
+	commands: &mut Commands,
+	assets: &EffectAssets,
+	at: Vec3,
+	spark: Spark,
+	vel: Vec3,
+	gravity: f32,
+	life: f32,
+	size: f32,
+) {
 	commands.spawn((
 		Mesh3d(assets.cube.clone()),
 		MeshMaterial3d(assets.material(spark)),
@@ -104,7 +159,11 @@ fn spawn_particle(commands: &mut Commands, assets: &EffectAssets, at: Vec3, spar
 }
 
 /// Moves, pulls, and shrinks every particle; removes the ones that are done.
-pub(super) fn update_particles(mut commands: Commands, time: Res<Time>, mut particles: Query<(Entity, &mut Particle, &mut Transform)>) {
+pub(super) fn update_particles(
+	mut commands: Commands,
+	time: Res<Time>,
+	mut particles: Query<(Entity, &mut Particle, &mut Transform)>,
+) {
 	let dt = time.delta_secs();
 	for (entity, mut p, mut transform) in &mut particles {
 		p.age += dt;
@@ -130,7 +189,7 @@ pub(super) fn ambient_particles(
 	enemies: Query<&EnemyAnim>,
 	mut timers: Local<[f32; 3]>,
 ) {
-	if game.screen != super::menu::Screen::Playing || particles.iter().count() > MAX_PARTICLES {
+	if game.screen != Screen::Playing || particles.iter().count() > MAX_PARTICLES {
 		return;
 	}
 	let world = &game.levels[game.depth];
@@ -159,8 +218,13 @@ pub(super) fn ambient_particles(
 	// Dust
 	while timers[1] > 0.2 {
 		timers[1] -= 0.2;
-		let at = feet + Vec3::new(rng.random_range(-4.0..4.0), rng.random_range(0.4..3.2), rng.random_range(-4.0..4.0));
-		let vel = Vec3::new(rng.random_range(-0.05..0.05), rng.random_range(-0.03..0.03), rng.random_range(-0.05..0.05));
+		let at = feet
+			+ Vec3::new(rng.random_range(-4.0..4.0), rng.random_range(0.4..3.2), rng.random_range(-4.0..4.0));
+		let vel = Vec3::new(
+			rng.random_range(-0.05..0.05),
+			rng.random_range(-0.03..0.03),
+			rng.random_range(-0.05..0.05),
+		);
 		spawn_particle(&mut commands, &assets, at, Spark::Dust, vel, 0.0, 4.0, 0.025);
 	}
 	// Monster shimmer
@@ -170,7 +234,8 @@ pub(super) fn ambient_particles(
 			if anim.pos.distance(feet) > 14.0 {
 				continue;
 			}
-			let at = anim.pos + Vec3::new(rng.random_range(-0.6..0.6), rng.random_range(0.3..1.6), rng.random_range(-0.6..0.6));
+			let at = anim.pos
+				+ Vec3::new(rng.random_range(-0.6..0.6), rng.random_range(0.3..1.6), rng.random_range(-0.6..0.6));
 			let vel = Vec3::new(0.0, rng.random_range(0.2..0.5), 0.0);
 			spawn_particle(&mut commands, &assets, at, Spark::Soul, vel, -0.1, 0.9, 0.035);
 		}
@@ -193,7 +258,13 @@ pub(super) struct EnemyAnim {
 /// The sprite's transform for monster `anim` standing at `target`: it slides
 /// there, breathes, sways, hops while moving, and squashes and shakes for a
 /// moment after a hit. `base` is its plain camera-facing transform at `pos`.
-pub(super) fn animate_enemy(anim: &mut EnemyAnim, target: Vec3, base: impl Fn(Vec3) -> Transform, t: f32, dt: f32) -> Transform {
+pub(super) fn animate_enemy(
+	anim: &mut EnemyAnim,
+	target: Vec3,
+	base: impl Fn(Vec3) -> Transform,
+	t: f32,
+	dt: f32,
+) -> Transform {
 	anim.pos = anim.pos.lerp(target, 1.0 - (-12.0 * dt).exp());
 	let phase = t * 3.0 + anim.id as f32 * 1.7;
 	let breathe = 1.0 + 0.05 * phase.sin();
@@ -213,121 +284,6 @@ pub(super) fn animate_enemy(anim: &mut EnemyAnim, target: Vec3, base: impl Fn(Ve
 	tr.translation += tr.rotation * Vec3::X * shake;
 	tr.rotation *= Quat::from_rotation_z(0.05 * (phase * 0.7).sin());
 	tr
-}
-
-// ---------------------------------------------------------------------------
-// The weapon in hand
-// ---------------------------------------------------------------------------
-
-/// The weapon held in view: the sword (`sword`) or the knife.
-#[derive(Component)]
-pub(super) struct Weapon {
-	sword: bool,
-}
-
-/// When the current swing and hurt-shake started, in seconds since startup.
-#[derive(Resource)]
-pub(super) struct Motion {
-	swing: f32,
-	shake: f32,
-}
-
-/// How each weapon rests in view: off to the lower right, tilted in.
-fn rest(sword: bool) -> Transform {
-	if sword {
-		// The sword model hangs blade down from its hilt: flip it up, lean it forward and in
-		Transform::from_xyz(0.34, -0.36, -0.6)
-			.with_rotation(Quat::from_rotation_z(0.35) * Quat::from_rotation_x(-0.9) * Quat::from_rotation_z(PI))
-			.with_scale(Vec3::splat(0.75))
-	} else {
-		// The knife's blade runs along +X: point it forward, tipped up
-		Transform::from_xyz(0.3, -0.3, -0.5)
-			.with_rotation(Quat::from_rotation_x(0.35) * Quat::from_rotation_y(FRAC_PI_2))
-			.with_scale(Vec3::splat(1.6))
-	}
-}
-
-/// Startup: the particle assets, and the two weapons, held by the camera.
-pub(super) fn setup(
-	mut commands: Commands,
-	mut meshes: ResMut<Assets<Mesh>>,
-	mut materials: ResMut<Assets<StandardMaterial>>,
-	mut images: ResMut<Assets<Image>>,
-	cameras: Query<Entity, With<WorldCamera>>,
-) {
-	let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
-	let spark_materials = Spark::ALL
-		.iter()
-		.map(|s| {
-			let color = s.color();
-			materials.add(StandardMaterial {
-				base_color: color,
-				emissive: color.to_linear() * if *s == Spark::Dust { 0.5 } else { 3.0 },
-				unlit: true,
-				alpha_mode: AlphaMode::Add,
-				..default()
-			})
-		})
-		.collect();
-	commands.insert_resource(EffectAssets { cube, materials: spark_materials });
-	commands.insert_resource(Motion { swing: -10.0, shake: -10.0 });
-
-	let Ok(camera) = cameras.single() else { return };
-	// Steel-grey: the models' colors come out white without the kit's texture
-	let steel = [(true, "Objects/Sword.glb", glam::Vec3::new(0.75, 0.75, 0.8)), (false, "Objects/Knife.glb", glam::Vec3::new(0.7, 0.7, 0.72))];
-	for (sword, model, tint) in steel {
-		let Ok(mut mesh) = ModelMesh::load(model) else { continue };
-		for v in &mut mesh.vertices {
-			v.color *= tint;
-		}
-		let parts = model_parts(&mesh, &mut meshes, &mut materials, &mut images);
-		let root = commands.spawn((Weapon { sword }, rest(sword), Visibility::Hidden)).id();
-		for (part, material) in parts {
-			let child = commands.spawn((Mesh3d(part), MeshMaterial3d(material), Transform::default())).id();
-			commands.entity(root).add_child(child);
-		}
-		commands.entity(camera).add_child(root);
-	}
-}
-
-/// Shows the weapon the hero has (the sword once equipped), swinging it
-/// through an arc on attacks and bobbing it while walking. It's put away in
-/// the main menu and the Generator, and while the level editor is open.
-pub(super) fn animate_weapon(
-	game: Res<Game>,
-	editor: Option<Res<Editor>>,
-	time: Res<Time>,
-	motion: Res<Motion>,
-	mut weapons: Query<(&Weapon, &mut Transform, &mut Visibility)>,
-	mut last_feet: Local<Vec3>,
-) {
-	let world = &game.levels[game.depth];
-	let editing = editor.is_some_and(|e| e.active);
-	let playing = !editing && !matches!(game.screen, super::menu::Screen::MainMenu { .. } | super::menu::Screen::Generator { .. });
-	let t = time.elapsed_secs();
-	let feet = Vec3::from_array(world.player.pos.to_array());
-	let moving = ((feet - *last_feet).length() / time.delta_secs().max(1e-4)).min(8.0) / 8.0;
-	*last_feet = feet;
-	let p = ((t - motion.swing) / SWING_TIME).clamp(0.0, 1.0);
-	let swinging = p < 1.0;
-	// Ease in and out across the arc
-	let e = p * p * (3.0 - 2.0 * p);
-	let arc = (PI * p).sin();
-	for (weapon, mut transform, mut visibility) in &mut weapons {
-		let shown = playing && weapon.sword == world.hero.sword;
-		*visibility = if shown { Visibility::Inherited } else { Visibility::Hidden };
-		let mut tr = rest(weapon.sword);
-		if swinging {
-			// From the right, across and down to the left
-			let sweep = Quat::from_rotation_y(0.8 - 1.8 * e) * Quat::from_rotation_x(-1.2 * arc);
-			tr.rotation = sweep * tr.rotation;
-			tr.translation += Vec3::new(0.15 - 0.5 * e, 0.1 * arc, -0.15 * arc);
-		} else {
-			// A gentle bob while walking, and a slow sway at rest
-			tr.translation += Vec3::new(0.0, (t * 10.0).sin() * 0.02 * moving + (t * 1.5).sin() * 0.004, 0.0);
-		}
-		*transform = tr;
-	}
 }
 
 // ---------------------------------------------------------------------------

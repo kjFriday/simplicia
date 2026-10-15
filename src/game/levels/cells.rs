@@ -10,18 +10,21 @@
 //   room_corner  walls north and east hall_tee       open north, east, south
 //                                     hall_cross     open on all sides
 //                                     hall_end       open north only
+//
+// The game loads them at startup (along with the ones cellgen.rs makes), and
+// tiles.rs places them; the editor (F1) saves them, read back by `parse`.
 use glam::Vec3;
 
 use super::catalog::RoomTheme;
-use super::editor::parse;
+use crate::game::editor::parse;
 use crate::dungeons::mapgen::MapGrid;
 
 /// Where cells are saved.
-pub(super) const CELLS_DIR: &str = "cells";
+pub(crate) const CELLS_DIR: &str = "cells";
 
 /// The kinds of cell. Rooms are made of the first three; halls of the rest.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum CellKind {
+pub(crate) enum CellKind {
 	RoomCenter,
 	RoomEdge,
 	RoomCorner,
@@ -33,7 +36,7 @@ pub(super) enum CellKind {
 }
 
 impl CellKind {
-	pub(super) const ALL: [CellKind; 8] = [
+	pub(crate) const ALL: [CellKind; 8] = [
 		CellKind::RoomCenter,
 		CellKind::RoomEdge,
 		CellKind::RoomCorner,
@@ -45,7 +48,7 @@ impl CellKind {
 	];
 
 	/// The file-name prefix cells of this kind are saved under.
-	pub(super) fn prefix(self) -> &'static str {
+	pub(crate) fn prefix(self) -> &'static str {
 		match self {
 			CellKind::RoomCenter => "room_center",
 			CellKind::RoomEdge => "room_edge",
@@ -100,7 +103,7 @@ pub(super) struct CellObject {
 	pub(super) light: bool,
 }
 
-pub(super) struct Cell {
+pub(crate) struct Cell {
 	pub(super) kind: CellKind,
 	/// Generated cells suit one kind of room; hand-made ones suit any
 	pub(super) theme: Option<RoomTheme>,
@@ -111,20 +114,27 @@ pub(super) struct Cell {
 }
 
 /// Every saved cell. Files that don't parse are skipped.
-pub(super) fn load_all() -> Vec<Cell> {
+pub(crate) fn load_all() -> Vec<Cell> {
 	let mut cells = Vec::new();
-	let mut files: Vec<_> = std::fs::read_dir(CELLS_DIR).into_iter().flatten().flatten().map(|e| e.path()).collect();
+	let mut files: Vec<_> =
+		std::fs::read_dir(CELLS_DIR).into_iter().flatten().flatten().map(|e| e.path()).collect();
 	files.sort();
 	for path in files {
 		let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
 		let Some(kind) = CellKind::of_file(name) else { continue };
 		let Ok(text) = std::fs::read_to_string(&path) else { continue };
 		let Ok(entries) = parse(&text) else { continue };
+		// A cell using a model that's no longer in models/ is skipped (the
+		// tile falls back to the kit), rather than failing every level it's in
+		let missing = entries.iter().find(|(model, ..)| crate::engine::models::get(model).is_none());
+		if let Some((missing, ..)) = missing {
+			if crate::game::dev_tools() {
+				eprintln!("{name}: skipped, {missing} isn't in models/");
+			}
+			continue;
+		}
 		let objects = entries
 			.into_iter()
-			// A model that's no longer in models/ is left out, rather than
-			// failing every level the cell turns up in
-			.filter(|(model, ..)| crate::engine::models::get(model).is_some())
 			.map(|(model, pos, yaw_degrees)| CellObject {
 				light: model.starts_with("Lights/"),
 				model,
@@ -143,7 +153,7 @@ pub(super) fn load_all() -> Vec<Cell> {
 /// The cell kind a floor tile needs, and how many quarter turns clockwise
 /// (north toward east) to turn the base cell so it fits. None when no kind
 /// fits, like a room tile walled on three sides.
-pub(super) fn fit(map: &MapGrid, x: i32, y: i32, in_room: bool) -> Option<(CellKind, usize)> {
+pub(crate) fn fit(map: &MapGrid, x: i32, y: i32, in_room: bool) -> Option<(CellKind, usize)> {
 	const DIRS: [(i32, i32); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
 	// Rooms care where the walls are; halls where the openings are
 	let sides: [bool; 4] = DIRS.map(|(dx, dy)| map.is_wall(x + dx, y + dy) == in_room);

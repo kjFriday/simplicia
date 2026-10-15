@@ -1,4 +1,8 @@
 // Tests for the game world: generation, movement, combat, and items.
+//
+// Each test builds a level with `World::generate` (levels/) from a fixed
+// seed, so the results are the same every run, then plays it through the
+// rules in play/. One test also draws the map with ui/'s minimap.
 use glam::Vec3;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -7,8 +11,8 @@ use super::combat::*;
 use super::items::*;
 use super::player::*;
 use super::world::*;
-use super::minimap;
 use crate::engine::hud::Framebuffer;
+use crate::game::ui::minimap;
 
 #[test]
 fn worlds_generate_with_player_on_floor() {

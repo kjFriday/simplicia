@@ -3,31 +3,34 @@
 // with every room of the level in its own file. The game build plays only
 // the saved presets, in order, one per depth; with none saved it falls back
 // to the default settings and a random seed.
+//
+// The game passes a preset's settings to `World::generate_with` (mod.rs);
+// the Generator screen (ui/) edits `GenSettings` with its sliders.
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::dungeons::mapgen::{generate_dungeon_with_options, MapGrid, Room};
 
 /// Where presets are saved: one folder per level.
-pub(super) const LEVELS_DIR: &str = "levels";
+pub(crate) const LEVELS_DIR: &str = "levels";
 const PRESET_FILE: &str = "level.preset";
 
 /// Everything that shapes a generated level. The Generator screen has a
 /// slider for each.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub(super) struct GenSettings {
-	pub(super) width: usize,
-	pub(super) height: usize,
-	pub(super) max_rooms: usize,
-	pub(super) room_min: i32,
-	pub(super) room_max: i32,
+pub(crate) struct GenSettings {
+	pub(crate) width: usize,
+	pub(crate) height: usize,
+	pub(crate) max_rooms: usize,
+	pub(crate) room_min: i32,
+	pub(crate) room_max: i32,
 	/// How many times the map is split before rooms go in; more is busier
-	pub(super) splits: usize,
+	pub(crate) splits: usize,
 	/// Percent of corridors that run diagonally
-	pub(super) diagonal: u32,
+	pub(crate) diagonal: u32,
 	/// Percent chance a room gets a monster, and an item
-	pub(super) enemies: u32,
-	pub(super) items: u32,
+	pub(crate) enemies: u32,
+	pub(crate) items: u32,
 }
 
 impl Default for GenSettings {
@@ -47,15 +50,15 @@ impl Default for GenSettings {
 }
 
 /// One slider: its label, range, and step.
-pub(super) struct Slider {
-	pub(super) label: &'static str,
-	pub(super) min: i64,
-	pub(super) max: i64,
-	pub(super) step: i64,
+pub(crate) struct Slider {
+	pub(crate) label: &'static str,
+	pub(crate) min: i64,
+	pub(crate) max: i64,
+	pub(crate) step: i64,
 }
 
 impl GenSettings {
-	pub(super) const SLIDERS: [Slider; 9] = [
+	pub(crate) const SLIDERS: [Slider; 9] = [
 		Slider { label: "Width", min: 24, max: 96, step: 4 },
 		Slider { label: "Height", min: 16, max: 64, step: 4 },
 		Slider { label: "Rooms", min: 2, max: 30, step: 1 },
@@ -67,7 +70,7 @@ impl GenSettings {
 		Slider { label: "Items %", min: 0, max: 100, step: 10 },
 	];
 
-	pub(super) fn get(&self, i: usize) -> i64 {
+	pub(crate) fn get(&self, i: usize) -> i64 {
 		match i {
 			0 => self.width as i64,
 			1 => self.height as i64,
@@ -81,7 +84,7 @@ impl GenSettings {
 		}
 	}
 
-	pub(super) fn set(&mut self, i: usize, v: i64) {
+	pub(crate) fn set(&mut self, i: usize, v: i64) {
 		self.set_unchecked(i, v);
 		self.fit_rooms();
 	}
@@ -112,12 +115,12 @@ impl GenSettings {
 	}
 
 	/// Moves slider `i` by `steps` of its step size.
-	pub(super) fn nudge(&mut self, i: usize, steps: i64) {
+	pub(crate) fn nudge(&mut self, i: usize, steps: i64) {
 		self.set(i, self.get(i) + steps * Self::SLIDERS[i].step);
 	}
 
 	/// The map and rooms these settings make from `seed`.
-	pub(super) fn layout(&self, seed: u64) -> (MapGrid, Vec<Room>) {
+	pub(crate) fn layout(&self, seed: u64) -> (MapGrid, Vec<Room>) {
 		use rand::SeedableRng;
 		let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
 		generate_dungeon_with_options(
@@ -135,9 +138,9 @@ impl GenSettings {
 
 /// A saved level: its settings and seed.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub(super) struct Preset {
-	pub(super) settings: GenSettings,
-	pub(super) seed: u64,
+pub(crate) struct Preset {
+	pub(crate) settings: GenSettings,
+	pub(crate) seed: u64,
 }
 
 impl Preset {
@@ -172,21 +175,23 @@ impl Preset {
 	/// Saves the preset as a new folder `levels/level_NN/`: the settings in
 	/// level.preset, and each room in its own room_NN.room file (its
 	/// position and size on the map). Returns the folder's name.
-	pub(super) fn save(&self) -> std::io::Result<String> {
-		let name = (1..).map(|n| format!("level_{n:02}")).find(|n| !Path::new(LEVELS_DIR).join(n).exists()).unwrap();
+	pub(crate) fn save(&self) -> std::io::Result<String> {
+		let free = |n: &String| !Path::new(LEVELS_DIR).join(n).exists();
+		let name = (1..).map(|n| format!("level_{n:02}")).find(free).unwrap();
 		let dir = Path::new(LEVELS_DIR).join(&name);
 		std::fs::create_dir_all(&dir)?;
 		std::fs::write(dir.join(PRESET_FILE), self.to_text())?;
 		let (_, rooms) = self.settings.layout(self.seed);
 		for (i, r) in rooms.iter().enumerate() {
-			let text = format!("# room: x y width height, in map tiles\n{} {} {} {}\n", r.x1, r.y1, r.x2 - r.x1, r.y2 - r.y1);
+			let (w, h) = (r.x2 - r.x1, r.y2 - r.y1);
+			let text = format!("# room: x y width height, in map tiles\n{} {} {w} {h}\n", r.x1, r.y1);
 			std::fs::write(dir.join(format!("room_{:02}.room", i + 1)), text)?;
 		}
 		Ok(name)
 	}
 
 	/// Every saved preset, in folder-name order.
-	pub(super) fn load_all() -> Vec<Preset> {
+	pub(crate) fn load_all() -> Vec<Preset> {
 		let mut dirs: Vec<PathBuf> = std::fs::read_dir(LEVELS_DIR)
 			.into_iter()
 			.flatten()

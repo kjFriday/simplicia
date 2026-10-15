@@ -2,6 +2,15 @@
 // and fonts, the HUD's character grid, handing meshes to Bevy, and the text
 // filter that draws the 3D view as characters. The game (src/game) builds on
 // these and decides what goes in the world.
+//
+// Reading order, simplest first:
+//   1. hud         - the character grid the HUD is written into
+//   2. font        - the bitmap font, and drawing that grid into pixels
+//   3. mesh        - triangles, vertices and textures, and the model loaders
+//   4. models      - the model files built into the executable
+//   5. scene       - placing models in the world and handing them to Bevy
+//   6. icons       - icon sprites, which build on mesh textures and scene
+//   7. text_filter - the shader material that draws the 3D view as text
 
 /// The bitmap font: glyph coverage, and drawing the HUD grid into pixels.
 pub mod font;

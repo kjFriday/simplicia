@@ -1,11 +1,22 @@
 // Combat: the monsters, their stats, and the turn order once one is close.
-use super::items::SHIELD_BLOCK;
-use super::items::SWORD_BONUS;
+//
+// The monsters live in `World::enemies` (world.rs). levels/ picks their
+// kinds and places them; this file adds the `impl World` block that starts
+// and ends combat and gives the enemies their turns. The hero's gear from
+// items.rs changes how hard hits land.
+use super::items::{SHIELD_BLOCK, SWORD_BONUS};
 use super::world::{Event, World};
+
+/// Enemies this close (in tiles, counting diagonals) start combat.
+pub(crate) const COMBAT_RANGE: i32 = 4;
+pub(crate) const PLAYER_HP: i32 = 10;
+pub(crate) const PLAYER_DAMAGE: i32 = 2;
+/// Lines of the log kept.
+pub(crate) const LOG_LINES: usize = 4;
 
 /// The kinds of monster.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub(super) enum EnemyKind {
+pub(crate) enum EnemyKind {
 	ThornVine,
 	ShadowImp,
 	GreenSpider,
@@ -14,28 +25,29 @@ pub(super) enum EnemyKind {
 }
 
 /// What a kind of monster is like.
-pub(super) struct EnemyStats {
-	pub(super) name: &'static str,
+pub(crate) struct EnemyStats {
+	pub(crate) name: &'static str,
 	/// Raven icons it can be drawn with; one is picked per monster
-	pub(super) icons: &'static [u32],
+	pub(crate) icons: &'static [u32],
 	/// Its letter on the map
-	pub(super) glyph: char,
-	pub(super) hp: i32,
-	pub(super) damage: i32,
+	pub(crate) glyph: char,
+	pub(crate) hp: i32,
+	pub(crate) damage: i32,
 	/// Tiles it steps per turn; 0 never moves
-	pub(super) steps: u32,
+	pub(crate) steps: u32,
 	/// Acts only every this many turns (2 is slow)
-	pub(super) every: u32,
+	pub(crate) every: u32,
 	/// How often it turns up at the top level, and how much more each level down
-	pub(super) weight: u32,
-	pub(super) weight_per_depth: u32,
+	pub(crate) weight: u32,
+	pub(crate) weight_per_depth: u32,
 }
 
 impl EnemyKind {
-	pub(super) const ALL: [EnemyKind; 5] =
+	pub(crate) const ALL: [EnemyKind; 5] =
 		[EnemyKind::ThornVine, EnemyKind::ShadowImp, EnemyKind::GreenSpider, EnemyKind::GreyRat, EnemyKind::ShadowBlob];
 
-	pub(super) fn stats(self) -> EnemyStats {
+	/// What this kind is like. Anything a kind doesn't set comes from `base`.
+	pub(crate) fn stats(self) -> EnemyStats {
 		let base = EnemyStats {
 			name: "",
 			icons: &[],
@@ -66,9 +78,15 @@ impl EnemyKind {
 				weight_per_depth: 1,
 				..base
 			},
-			EnemyKind::GreenSpider => {
-				EnemyStats { name: "Green Spider", icons: &[1066, 1070], glyph: 's', hp: 2, steps: 2, weight: 2, ..base }
-			}
+			EnemyKind::GreenSpider => EnemyStats {
+				name: "Green Spider",
+				icons: &[1066, 1070],
+				glyph: 's',
+				hp: 2,
+				steps: 2,
+				weight: 2,
+				..base
+			},
 			EnemyKind::GreyRat => EnemyStats { name: "Grey Rat", icons: &[861], glyph: 'r', hp: 1, weight: 5, ..base },
 			EnemyKind::ShadowBlob => EnemyStats {
 				name: "Shadow Blob",
@@ -85,7 +103,7 @@ impl EnemyKind {
 	}
 
 	/// A random kind, with tougher ones likelier deeper down.
-	pub(super) fn pick(rng: &mut impl rand::Rng, depth: usize) -> Self {
+	pub(crate) fn pick(rng: &mut impl rand::Rng, depth: usize) -> Self {
 		use rand::RngExt;
 		let weight = |k: EnemyKind| {
 			let s = k.stats();
@@ -105,21 +123,21 @@ impl EnemyKind {
 
 /// A monster on the map. `id` stays the same for its whole life, so the 3D
 /// view can match its sprite to it.
-pub(super) struct Enemy {
-	pub(super) id: u32,
-	pub(super) kind: EnemyKind,
+pub(crate) struct Enemy {
+	pub(crate) id: u32,
+	pub(crate) kind: EnemyKind,
 	/// Which of its kind's icons it's drawn with
-	pub(super) icon: u32,
-	pub(super) x: i32,
-	pub(super) y: i32,
-	pub(super) hp: i32,
+	pub(crate) icon: u32,
+	pub(crate) x: i32,
+	pub(crate) y: i32,
+	pub(crate) hp: i32,
 	/// Turns it has waited, for kinds that act only every few turns
-	pub(super) waited: u32,
+	pub(crate) waited: u32,
 }
 
 impl Enemy {
 	/// A fresh monster of `kind` on tile (x, y), drawn with a random one of its icons.
-	pub(super) fn new(rng: &mut impl rand::Rng, id: u32, kind: EnemyKind, x: i32, y: i32) -> Self {
+	pub(crate) fn new(rng: &mut impl rand::Rng, id: u32, kind: EnemyKind, x: i32, y: i32) -> Self {
 		use rand::RngExt;
 		let s = kind.stats();
 		let icon = s.icons[rng.random_range(0..s.icons.len())];
@@ -127,34 +145,29 @@ impl Enemy {
 	}
 }
 
-/// Enemies this close (in tiles, counting diagonals) start combat.
-pub(super) const COMBAT_RANGE: i32 = 4;
-pub(super) const PLAYER_HP: i32 = 10;
-pub(super) const PLAYER_DAMAGE: i32 = 2;
-/// Lines of the log kept.
-pub(super) const LOG_LINES: usize = 4;
-
 /// Combat: enemies taking their turns, and the log.
 impl World {
-	pub(super) fn say(&mut self, line: impl Into<String>) {
+	/// Adds a line to the log, dropping the oldest past LOG_LINES.
+	pub(crate) fn say(&mut self, line: impl Into<String>) {
 		self.log.push(line.into());
 		if self.log.len() > LOG_LINES {
 			self.log.remove(0);
 		}
 	}
 
-	pub(super) fn enemy_at(&self, x: i32, y: i32) -> Option<usize> {
+	/// The index of the enemy on tile (x, y), if there is one.
+	pub(crate) fn enemy_at(&self, x: i32, y: i32) -> Option<usize> {
 		self.enemies.iter().position(|e| (e.x, e.y) == (x, y))
 	}
 
 	/// Enemies close enough to fight.
-	pub(super) fn near(&self, e: &Enemy) -> bool {
+	pub(crate) fn near(&self, e: &Enemy) -> bool {
 		(e.x - self.player.x).abs().max((e.y - self.player.y).abs()) <= COMBAT_RANGE
 	}
 
 	/// Starts or ends combat as enemies come and go. Starting it snaps the
 	/// player to the middle of their tile.
-	pub(super) fn update_combat(&mut self) {
+	pub(crate) fn update_combat(&mut self) {
 		let combat = self.enemies.iter().any(|e| self.near(e));
 		if combat && !self.combat {
 			self.player.snap_to_tile(&self.terrain);
@@ -168,7 +181,7 @@ impl World {
 	/// Swings at whatever's on the tile in front: an enemy gets hit, a closed
 	/// chest opens. Hitting something in combat takes a turn (as bumping into
 	/// it does); a swing at nothing doesn't.
-	pub(super) fn attack(&mut self) {
+	pub(crate) fn attack(&mut self) {
 		self.events.push(Event::Swing);
 		let (dx, dy) = self.player.forward();
 		let (tx, ty) = (self.player.x + dx, self.player.y + dy);
@@ -186,7 +199,7 @@ impl World {
 	}
 
 	/// The player hits enemy `i`, killing it if that's its last HP.
-	pub(super) fn strike(&mut self, i: usize) {
+	pub(crate) fn strike(&mut self, i: usize) {
 		let e = &self.enemies[i];
 		let name = e.kind.stats().name;
 		let at = self.tile_center_of(e.x, e.y) + glam::Vec3::Y * 0.9;
@@ -204,7 +217,7 @@ impl World {
 
 	/// The enemies' turn in combat: each one close by attacks if it's next to
 	/// the player, or else steps toward them, as fast as its kind allows.
-	pub(super) fn enemies_act(&mut self) {
+	pub(crate) fn enemies_act(&mut self) {
 		for i in 0..self.enemies.len() {
 			if !self.near(&self.enemies[i]) {
 				continue;
@@ -229,11 +242,13 @@ impl World {
 		}
 	}
 
+	/// Whether enemy `i` stands right beside the player (not diagonally).
 	fn next_to_player(&self, i: usize) -> bool {
 		let e = &self.enemies[i];
 		(self.player.x - e.x).abs() + (self.player.y - e.y).abs() == 1
 	}
 
+	/// An enemy of this kind hits the player, unless the shield turns it aside.
 	fn enemy_attacks(&mut self, stats: &EnemyStats) {
 		if self.hero.shield && rand::random_bool(SHIELD_BLOCK) {
 			self.say(format!("Your shield turns the {} aside.", stats.name));

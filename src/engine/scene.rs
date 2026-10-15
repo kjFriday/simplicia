@@ -20,6 +20,53 @@ pub(crate) struct SceneObject {
 pub(crate) const NEAR_PLANE: f32 = 0.05;
 pub(crate) const FAR_PLANE: f32 = 300.0;
 
+/// What one of our meshes becomes in Bevy: a mesh and material per texture it
+/// uses. Spawn every part with the same transform to show the model.
+pub(crate) type ModelParts = Vec<(Handle<Mesh>, Handle<StandardMaterial>)>;
+
+/// Uploads one of our textures as a Bevy image: pixelated and repeating.
+pub(crate) fn to_bevy_image(texture: &Texture) -> Image {
+	let mut image = Image::new(
+		Extent3d { width: texture.width, height: texture.height, depth_or_array_layers: 1 },
+		TextureDimension::D2,
+		texture.rgba.clone(),
+		TextureFormat::Rgba8UnormSrgb,
+		RenderAssetUsages::RENDER_WORLD,
+	);
+	image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+		address_mode_u: ImageAddressMode::Repeat,
+		address_mode_v: ImageAddressMode::Repeat,
+		..ImageSamplerDescriptor::nearest()
+	});
+	image
+}
+
+/// Uploads one of our meshes and its textures to Bevy, one part per texture.
+pub(crate) fn model_parts(
+	mesh: &crate::engine::mesh::Mesh,
+	meshes: &mut Assets<Mesh>,
+	materials: &mut Assets<StandardMaterial>,
+	images: &mut Assets<Image>,
+) -> ModelParts {
+	let textures: Vec<_> = mesh.textures.iter().map(|t| images.add(to_bevy_image(t))).collect();
+	mesh.split_by_texture()
+		.into_iter()
+		.map(|(tex, tris)| {
+			// Vertex colors carry the model colors and tint the texture; the
+			// material just lets light shade them
+			let material = materials.add(StandardMaterial {
+				base_color: Color::WHITE,
+				base_color_texture: textures.get(tex as usize).cloned(),
+				perceptual_roughness: 1.0,
+				cull_mode: None,
+				double_sided: true,
+				..default()
+			});
+			(meshes.add(to_bevy_mesh(mesh, &tris)), material)
+		})
+		.collect()
+}
+
 /// Turns one of our meshes into a Bevy mesh with vertex colors. Every triangle
 /// gets its own three vertices so its normal is flat, matching the text shading.
 fn to_bevy_mesh(mesh: &crate::engine::mesh::Mesh, triangles: &[[usize; 3]]) -> Mesh {
@@ -45,50 +92,4 @@ fn to_bevy_mesh(mesh: &crate::engine::mesh::Mesh, triangles: &[[usize; 3]]) -> M
 		.with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
 		.with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
 		.with_inserted_indices(Indices::U32((0..count).collect()))
-}
-
-/// Uploads one of our textures as a Bevy image: pixelated and repeating.
-pub(crate) fn to_bevy_image(texture: &Texture) -> Image {
-	let mut image = Image::new(
-		Extent3d { width: texture.width, height: texture.height, depth_or_array_layers: 1 },
-		TextureDimension::D2,
-		texture.rgba.clone(),
-		TextureFormat::Rgba8UnormSrgb,
-		RenderAssetUsages::RENDER_WORLD,
-	);
-	image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-		address_mode_u: ImageAddressMode::Repeat,
-		address_mode_v: ImageAddressMode::Repeat,
-		..ImageSamplerDescriptor::nearest()
-	});
-	image
-}
-
-/// What one of our meshes becomes in Bevy: a mesh and material per texture it
-/// uses. Spawn every part with the same transform to show the model.
-pub(crate) type ModelParts = Vec<(Handle<Mesh>, Handle<StandardMaterial>)>;
-
-pub(crate) fn model_parts(
-	mesh: &crate::engine::mesh::Mesh,
-	meshes: &mut Assets<Mesh>,
-	materials: &mut Assets<StandardMaterial>,
-	images: &mut Assets<Image>,
-) -> ModelParts {
-	let textures: Vec<_> = mesh.textures.iter().map(|t| images.add(to_bevy_image(t))).collect();
-	mesh.split_by_texture()
-		.into_iter()
-		.map(|(tex, tris)| {
-			// Vertex colors carry the model colors and tint the texture; the
-			// material just lets light shade them
-			let material = materials.add(StandardMaterial {
-				base_color: Color::WHITE,
-				base_color_texture: textures.get(tex as usize).cloned(),
-				perceptual_roughness: 1.0,
-				cull_mode: None,
-				double_sided: true,
-				..default()
-			});
-			(meshes.add(to_bevy_mesh(mesh, &tris)), material)
-		})
-		.collect()
 }

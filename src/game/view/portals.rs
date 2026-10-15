@@ -1,6 +1,8 @@
 // Portals: the staircases glow like magic gateways. Each gets a column of
 // light from the pit up through the ceiling (which also hides the hole the
 // stairs leave in it), a colored light, and sparks that spiral up through it.
+// scene.rs spawns one on each staircase when a level is shown; `animate`
+// moves the sparks every frame.
 use bevy::prelude::*;
 
 /// The way down glows violet; the way up, cyan.

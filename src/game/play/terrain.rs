@@ -2,25 +2,29 @@
 // sunk, with a stair tile (a ramp) joining them to their corridors, and
 // rooms can hold ledges and pits. Walking follows the floor up and down,
 // and nothing can climb more than STEP_HEIGHT at once.
+//
+// Each `World` (world.rs) has one `Terrain`. levels/ fills it in while
+// shaping a level; the player and the enemies ask it whether a step is
+// allowed.
 use glam::Vec3;
 
 use super::world::{DIRECTIONS, TILE};
 
 /// The biggest rise or drop a step can take, in meters. Ledges and pits are
 /// a little less than this; whole raised rooms need a stair tile.
-pub(super) const STEP_HEIGHT: f32 = 1.3;
+pub(crate) const STEP_HEIGHT: f32 = 1.3;
 
 /// A stair tile: the floor rises from `low` on the edge opposite `dir` to
 /// `high` on the edge toward `dir` (0 north, 1 east, 2 south, 3 west).
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub(super) struct Ramp {
-	pub(super) dir: usize,
-	pub(super) low: f32,
-	pub(super) high: f32,
+pub(crate) struct Ramp {
+	pub(crate) dir: usize,
+	pub(crate) low: f32,
+	pub(crate) high: f32,
 }
 
 /// Floor heights for every tile of a map.
-pub(super) struct Terrain {
+pub(crate) struct Terrain {
 	width: usize,
 	height: usize,
 	floor: Vec<f32>,
@@ -29,17 +33,12 @@ pub(super) struct Terrain {
 
 impl Terrain {
 	/// Everything at height 0.
-	pub(super) fn flat(width: usize, height: usize) -> Self {
+	pub(crate) fn flat(width: usize, height: usize) -> Self {
 		Self { width, height, floor: vec![0.0; width * height], ramps: vec![None; width * height] }
 	}
 
-	fn index(&self, x: i32, y: i32) -> Option<usize> {
-		(x >= 0 && y >= 0 && (x as usize) < self.width && (y as usize) < self.height)
-			.then(|| y as usize * self.width + x as usize)
-	}
-
 	/// The floor height of a flat tile; for a stair tile, the height halfway up.
-	pub(super) fn tile(&self, x: i32, y: i32) -> f32 {
+	pub(crate) fn tile(&self, x: i32, y: i32) -> f32 {
 		let Some(i) = self.index(x, y) else { return 0.0 };
 		match self.ramps[i] {
 			Some(r) => (r.low + r.high) / 2.0,
@@ -47,35 +46,29 @@ impl Terrain {
 		}
 	}
 
-	pub(super) fn set(&mut self, x: i32, y: i32, h: f32) {
+	/// Makes tile (x, y) flat at height `h`.
+	pub(crate) fn set(&mut self, x: i32, y: i32, h: f32) {
 		if let Some(i) = self.index(x, y) {
 			self.floor[i] = h;
 			self.ramps[i] = None;
 		}
 	}
 
-	pub(super) fn set_ramp(&mut self, x: i32, y: i32, ramp: Ramp) {
+	/// Makes tile (x, y) a stair tile.
+	pub(crate) fn set_ramp(&mut self, x: i32, y: i32, ramp: Ramp) {
 		if let Some(i) = self.index(x, y) {
 			self.floor[i] = ramp.low;
 			self.ramps[i] = Some(ramp);
 		}
 	}
 
-	pub(super) fn ramp(&self, x: i32, y: i32) -> Option<Ramp> {
+	/// The stair on tile (x, y), if it is one.
+	pub(crate) fn ramp(&self, x: i32, y: i32) -> Option<Ramp> {
 		self.index(x, y).and_then(|i| self.ramps[i])
 	}
 
-	/// The floor height on tile (x, y)'s edge toward `dir`.
-	fn edge(&self, x: i32, y: i32, dir: usize) -> f32 {
-		match self.ramp(x, y) {
-			Some(r) if r.dir == dir => r.high,
-			Some(r) if (r.dir + 2) % 4 == dir => r.low,
-			_ => self.tile(x, y),
-		}
-	}
-
 	/// The floor height under a point in the world.
-	pub(super) fn at(&self, pos: Vec3) -> f32 {
+	pub(crate) fn at(&self, pos: Vec3) -> f32 {
 		let (x, y) = ((pos.x / TILE).floor() as i32, (pos.z / TILE).floor() as i32);
 		match self.ramp(x, y) {
 			Some(r) => {
@@ -91,11 +84,26 @@ impl Terrain {
 
 	/// Whether one step from tile `from` to the neighboring tile `to` is
 	/// small enough to take.
-	pub(super) fn can_step(&self, from: (i32, i32), to: (i32, i32)) -> bool {
+	pub(crate) fn can_step(&self, from: (i32, i32), to: (i32, i32)) -> bool {
 		let Some(dir) = DIRECTIONS.iter().position(|&d| d == (to.0 - from.0, to.1 - from.1)) else { return false };
 		let out = self.edge(from.0, from.1, dir);
 		let into = self.edge(to.0, to.1, (dir + 2) % 4);
 		(out - into).abs() <= STEP_HEIGHT
+	}
+
+	/// Where tile (x, y) is in `floor` and `ramps`; none off the map.
+	fn index(&self, x: i32, y: i32) -> Option<usize> {
+		(x >= 0 && y >= 0 && (x as usize) < self.width && (y as usize) < self.height)
+			.then(|| y as usize * self.width + x as usize)
+	}
+
+	/// The floor height on tile (x, y)'s edge toward `dir`.
+	fn edge(&self, x: i32, y: i32, dir: usize) -> f32 {
+		match self.ramp(x, y) {
+			Some(r) if r.dir == dir => r.high,
+			Some(r) if (r.dir + 2) % 4 == dir => r.low,
+			_ => self.tile(x, y),
+		}
 	}
 }
 

@@ -5,7 +5,8 @@
 // things (books, potions, plates) on top of whatever can hold them.
 //
 // Cells are built in their base orientation (see cells.rs): the tile spans
-// -2..2 m on X and Z with its floor at y = 0, and north is -Z.
+// -2..2 m on X and Z with its floor at y = 0, and north is -Z. The game
+// calls `generate` once at startup; tiles.rs places the cells it makes.
 use glam::{Quat, Vec3};
 use rand::{Rng, RngExt};
 
@@ -25,7 +26,7 @@ const SIDES: [Vec3; 4] = [Vec3::NEG_Z, Vec3::X, Vec3::Z, Vec3::NEG_X];
 
 /// Makes every generated cell: VARIANTS of each room kind for each theme,
 /// and VARIANTS of each hall kind.
-pub(super) fn generate(catalog: &Catalog, rng: &mut impl Rng) -> Vec<Cell> {
+pub(crate) fn generate(catalog: &Catalog, rng: &mut impl Rng) -> Vec<Cell> {
 	let mut cells = Vec::new();
 	for theme in RoomTheme::ALL {
 		for kind in [CellKind::RoomCenter, CellKind::RoomEdge, CellKind::RoomCorner] {
@@ -58,7 +59,15 @@ struct CellDraft {
 
 impl CellDraft {
 	fn new(kind: CellKind, theme: Option<RoomTheme>) -> Self {
-		Self { kind, theme, objects: Vec::new(), holds: Vec::new(), tops: Vec::new(), feet: Vec::new(), taken: Vec::new() }
+		Self {
+			kind,
+			theme,
+			objects: Vec::new(),
+			holds: Vec::new(),
+			tops: Vec::new(),
+			feet: Vec::new(),
+			taken: Vec::new(),
+		}
 	}
 
 	/// Sides with a wall in this kind's base orientation.
@@ -80,71 +89,20 @@ impl CellDraft {
 		let by_wall = catalog.pick(theme, |a| matches!(a.mount, Mount::Floor { wall: true, .. }));
 		let on_wall = catalog.pick(theme, |a| a.mount == Mount::Wall && a.size.y < 1.5);
 		let wall_lights = catalog.pick(None, |a| a.mount == Mount::Wall && a.light);
-		let standing = catalog.pick(theme, |a| matches!(a.mount, Mount::Floor { wall: false, flat: false }));
 		let holders = catalog.pick(theme, |a| a.holds && matches!(a.mount, Mount::Floor { .. }));
-		let seats = catalog.pick(theme, |a| matches!(a.mount, Mount::Floor { wall: false, flat: false }) && a.size.y < 1.6 && !a.holds);
+		let seats = catalog.pick(theme, |a| {
+			matches!(a.mount, Mount::Floor { wall: false, flat: false }) && a.size.y < 1.6 && !a.holds
+		});
 		let carpets = catalog.pick(theme, |a| matches!(a.mount, Mount::Floor { flat: true, .. }));
 		let ceiling = catalog.pick(theme, |a| a.mount == Mount::Ceiling);
-		let small = catalog.pick(None, |a| matches!(a.mount, Mount::Floor { wall: false, flat: false }) && a.size.max_element() < 1.0);
+		let small = catalog.pick(None, |a| {
+			matches!(a.mount, Mount::Floor { wall: false, flat: false }) && a.size.max_element() < 1.0
+		});
 
 		match self.kind {
-			CellKind::RoomEdge | CellKind::RoomCorner => {
-				// Against the walls: one or two big pieces, sometimes something hung above
-				for &side in &walls {
-					if rng.random_bool(0.75) {
-						let near_corner = (self.kind == CellKind::RoomCorner).then(|| walls[(walls.iter().position(|&w| w == side).unwrap() + 1) % walls.len()]);
-						self.against_wall(pick(rng, &by_wall), side, near_corner, rng);
-					}
-					if rng.random_bool(0.5) {
-						self.on_wall(pick(rng, &on_wall), side, rng);
-					}
-				}
-				if self.kind == CellKind::RoomCorner && rng.random_bool(0.4) {
-					// Something small tucked into the corner, at an angle
-					let (a, b) = (SIDES[walls[0]], SIDES[walls[1 % walls.len()]]);
-					let at = (a + b) * (WALL_FACE - 0.5 - rng.random_range(0.0..0.3));
-					let asset = pick(rng, &small);
-					let (turns, w) = (quarter(rng), wobble(rng, 30.0));
-					self.stand(asset, at, turns, w, None);
-				}
-			}
-			CellKind::RoomCenter => match rng.random_range(0..10) {
-				// Empty floor, so rooms stay walkable
-				0..=3 => {}
-				// A table (or the like) with seats around it
-				4..=7 => {
-					// Off the exact middle, and a little askew
-					let at = Vec3::new(rng.random_range(-0.35..0.35), 0.0, rng.random_range(-0.35..0.35));
-					let asset = pick(rng, &holders);
-					let (turns, w) = (quarter(rng), wobble(rng, 10.0));
-					if let Some(table) = self.stand(asset, at, turns, w, None) {
-						self.seats_around(table, &seats, rng);
-					}
-				}
-				// A carpet, maybe with something on it
-				8 => {
-					let asset = pick(rng, &carpets);
-					let (turns, w) = (quarter(rng), wobble(rng, 6.0));
-					self.stand(asset, Vec3::ZERO, turns, w, None);
-					if rng.random_bool(0.5) {
-						let asset = pick(rng, &holders);
-						let (turns, w) = (quarter(rng), wobble(rng, 10.0));
-						self.stand(asset, Vec3::ZERO, turns, w, None);
-					}
-				}
-				// A chandelier overhead
-				_ => self.hang(pick(rng, &ceiling)),
-			},
-			// Halls: mostly bare, sometimes a light or a crate along a wall
-			_ => {
-				if let Some(&side) = walls.get(rng.random_range(0..walls.len().max(1))) {
-					if rng.random_bool(0.35) {
-						self.on_wall(pick(rng, &wall_lights), side, rng);
-					} else if rng.random_bool(0.25) {
-						self.against_wall(pick(rng, &small), side, None, rng);
-					}
-				}
-			}
+			CellKind::RoomEdge | CellKind::RoomCorner => self.fill_room_edge(&walls, &by_wall, &on_wall, &small, rng),
+			CellKind::RoomCenter => self.fill_room_center(&holders, &seats, &carpets, &ceiling, rng),
+			_ => self.fill_hall(&walls, &wall_lights, &small, rng),
 		}
 		// Small things on top of everything that can hold them
 		let surface = catalog.pick(theme, |a| a.mount == Mount::Surface);
@@ -157,6 +115,85 @@ impl CellDraft {
 		}
 		Cell { kind: self.kind, theme, structure: false, objects: self.objects }
 	}
+
+	/// Room edges and corners. Against the walls: one or two big pieces,
+	/// sometimes something hung above.
+	fn fill_room_edge(
+		&mut self,
+		walls: &[usize],
+		by_wall: &[&Asset],
+		on_wall: &[&Asset],
+		small: &[&Asset],
+		rng: &mut impl Rng,
+	) {
+		for &side in walls {
+			if rng.random_bool(0.75) {
+				let near_corner = (self.kind == CellKind::RoomCorner)
+					.then(|| walls[(walls.iter().position(|&w| w == side).unwrap() + 1) % walls.len()]);
+				self.against_wall(pick(rng, by_wall), side, near_corner, rng);
+			}
+			if rng.random_bool(0.5) {
+				self.on_wall(pick(rng, on_wall), side, rng);
+			}
+		}
+		if self.kind == CellKind::RoomCorner && rng.random_bool(0.4) {
+			// Something small tucked into the corner, at an angle
+			let (a, b) = (SIDES[walls[0]], SIDES[walls[1 % walls.len()]]);
+			let at = (a + b) * (WALL_FACE - 0.5 - rng.random_range(0.0..0.3));
+			let asset = pick(rng, small);
+			let (turns, w) = (quarter(rng), wobble(rng, 30.0));
+			self.stand(asset, at, turns, w, None);
+		}
+	}
+
+	/// The middle of a room: bare, a table with seats, a carpet, or a chandelier.
+	fn fill_room_center(
+		&mut self,
+		holders: &[&Asset],
+		seats: &[&Asset],
+		carpets: &[&Asset],
+		ceiling: &[&Asset],
+		rng: &mut impl Rng,
+	) {
+		match rng.random_range(0..10) {
+			// Empty floor, so rooms stay walkable
+			0..=3 => {}
+			// A table (or the like) with seats around it
+			4..=7 => {
+				// Off the exact middle, and a little askew
+				let at = Vec3::new(rng.random_range(-0.35..0.35), 0.0, rng.random_range(-0.35..0.35));
+				let asset = pick(rng, holders);
+				let (turns, w) = (quarter(rng), wobble(rng, 10.0));
+				if let Some(table) = self.stand(asset, at, turns, w, None) {
+					self.seats_around(table, seats, rng);
+				}
+			}
+			// A carpet, maybe with something on it
+			8 => {
+				let asset = pick(rng, carpets);
+				let (turns, w) = (quarter(rng), wobble(rng, 6.0));
+				self.stand(asset, Vec3::ZERO, turns, w, None);
+				if rng.random_bool(0.5) {
+					let asset = pick(rng, holders);
+					let (turns, w) = (quarter(rng), wobble(rng, 10.0));
+					self.stand(asset, Vec3::ZERO, turns, w, None);
+				}
+			}
+			// A chandelier overhead
+			_ => self.hang(pick(rng, ceiling)),
+		}
+	}
+
+	/// Halls: mostly bare, sometimes a light or a crate along a wall.
+	fn fill_hall(&mut self, walls: &[usize], wall_lights: &[&Asset], small: &[&Asset], rng: &mut impl Rng) {
+		if let Some(&side) = walls.get(rng.random_range(0..walls.len().max(1))) {
+			if rng.random_bool(0.35) {
+				self.on_wall(pick(rng, wall_lights), side, rng);
+			} else if rng.random_bool(0.25) {
+				self.against_wall(pick(rng, small), side, None, rng);
+			}
+		}
+	}
 }
 
 /// Placing things in a draft.
@@ -165,7 +202,14 @@ impl CellDraft {
 	/// unless `at.y` says otherwise), turned `turns` quarter turns and then
 	/// `wobble` radians more, so things don't all sit square. Returns its
 	/// index, or None if it doesn't fit.
-	fn stand(&mut self, asset: Option<&Asset>, at: Vec3, turns: u32, wobble: f32, parent: Option<usize>) -> Option<usize> {
+	fn stand(
+		&mut self,
+		asset: Option<&Asset>,
+		at: Vec3,
+		turns: u32,
+		wobble: f32,
+		parent: Option<usize>,
+	) -> Option<usize> {
 		let asset = asset?;
 		let yaw = turns as f32 * std::f32::consts::FRAC_PI_2 + wobble;
 		let (w, d) = if turns % 2 == 0 { (asset.size.x, asset.size.z) } else { (asset.size.z, asset.size.x) };
@@ -177,7 +221,8 @@ impl CellDraft {
 		}
 		// Clear of other things on the floor (carpets and things on top don't count)
 		let flat = matches!(asset.mount, Mount::Floor { flat: true, .. });
-		if parent.is_none() && !flat && self.taken.iter().any(|&(a, b)| lo.x < b.x && hi.x > a.x && lo.z < b.z && hi.z > a.z) {
+		let overlaps = |&(a, b): &(Vec3, Vec3)| lo.x < b.x && hi.x > a.x && lo.z < b.z && hi.z > a.z;
+		if parent.is_none() && !flat && self.taken.iter().any(overlaps) {
 			return None;
 		}
 		if parent.is_none() && !flat {
@@ -186,7 +231,14 @@ impl CellDraft {
 		Some(self.add(asset, at + Quat::from_rotation_y(yaw) * asset.offset, yaw, parent, Some((lo, hi))))
 	}
 
-	fn add(&mut self, asset: &Asset, origin: Vec3, yaw: f32, parent: Option<usize>, foot: Option<(Vec3, Vec3)>) -> usize {
+	fn add(
+		&mut self,
+		asset: &Asset,
+		origin: Vec3,
+		yaw: f32,
+		parent: Option<usize>,
+		foot: Option<(Vec3, Vec3)>,
+	) -> usize {
 		self.objects.push(CellObject {
 			model: asset.model.to_string(),
 			pos: origin,
@@ -234,10 +286,15 @@ impl CellDraft {
 		let along = Vec3::new(-SIDES[side].z, 0.0, SIDES[side].x);
 		let slide = rng.random_range(-0.8..=0.8);
 		// The back stays where the model's origin is; center it along the wall
-		let center_along = if asset.wall_axis_x { Vec3::new(0.0, 0.0, asset.offset.z) } else { Vec3::new(asset.offset.x, 0.0, 0.0) };
+		let center_along = if asset.wall_axis_x {
+			Vec3::new(0.0, 0.0, asset.offset.z)
+		} else {
+			Vec3::new(asset.offset.x, 0.0, 0.0)
+		};
 		let origin = SIDES[side] * WALL_FACE + along * slide + Quat::from_rotation_y(yaw) * center_along;
 		// Its footprint against the wall, so wall shelves can hold things too
-		let (depth, length) = if asset.wall_axis_x { (asset.size.x, asset.size.z) } else { (asset.size.z, asset.size.x) };
+		let (depth, length) =
+			if asset.wall_axis_x { (asset.size.x, asset.size.z) } else { (asset.size.z, asset.size.x) };
 		let middle = SIDES[side] * (WALL_FACE - depth / 2.0) + along * slide;
 		let half = (along * length / 2.0).abs() + (SIDES[side] * depth / 2.0).abs();
 		self.add(asset, origin, yaw, None, Some((middle - half, middle + half)));
@@ -303,7 +360,8 @@ fn model_out(asset: &Asset) -> Vec3 {
 /// Quarter turns that point `asset`'s front (away from its back) along `inward`.
 fn turns_facing(asset: &Asset, inward: Vec3) -> u32 {
 	let out = model_out(asset);
-	(0..4).find(|&t| (Quat::from_rotation_y(t as f32 * std::f32::consts::FRAC_PI_2) * out).distance(inward) < 0.1).unwrap_or(0)
+	let turned = |t: u32| Quat::from_rotation_y(t as f32 * std::f32::consts::FRAC_PI_2) * out;
+	(0..4).find(|&t| turned(t).distance(inward) < 0.1).unwrap_or(0)
 }
 
 /// A random turn of up to `degrees` either way, in radians.
