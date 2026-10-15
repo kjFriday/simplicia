@@ -12,6 +12,7 @@ use std::f32::consts::{FRAC_PI_2, PI};
 use bevy::prelude::*;
 use rand::RngExt;
 
+use super::editor::Editor;
 use super::window::WorldCamera;
 use super::world::Event;
 use super::Game;
@@ -290,16 +291,19 @@ pub(super) fn setup(
 }
 
 /// Shows the weapon the hero has (the sword once equipped), swinging it
-/// through an arc on attacks and bobbing it while walking.
+/// through an arc on attacks and bobbing it while walking. It's put away in
+/// the main menu and the Generator, and while the level editor is open.
 pub(super) fn animate_weapon(
 	game: Res<Game>,
+	editor: Option<Res<Editor>>,
 	time: Res<Time>,
 	motion: Res<Motion>,
 	mut weapons: Query<(&Weapon, &mut Transform, &mut Visibility)>,
 	mut last_feet: Local<Vec3>,
 ) {
 	let world = &game.levels[game.depth];
-	let playing = !matches!(game.screen, super::menu::Screen::MainMenu { .. } | super::menu::Screen::Generator { .. });
+	let editing = editor.is_some_and(|e| e.active);
+	let playing = !editing && !matches!(game.screen, super::menu::Screen::MainMenu { .. } | super::menu::Screen::Generator { .. });
 	let t = time.elapsed_secs();
 	let feet = Vec3::from_array(world.player.pos.to_array());
 	let moving = ((feet - *last_feet).length() / time.delta_secs().max(1e-4)).min(8.0) / 8.0;

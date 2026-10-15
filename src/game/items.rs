@@ -23,6 +23,16 @@ impl ItemKind {
 		}
 	}
 
+	/// Its letter on the map.
+	pub(super) fn glyph(self) -> char {
+		match self {
+			ItemKind::Potion => '!',
+			ItemKind::Gold => '$',
+			ItemKind::Sword => ')',
+			ItemKind::Shield => '[',
+		}
+	}
+
 	/// The Raven icon it's drawn with, on the floor.
 	pub(super) fn icon(self) -> u32 {
 		match self {
@@ -104,11 +114,13 @@ impl World {
 		}
 	}
 
-	/// Uses or equips the `index`th item in the bag. A potion is used up;
-	/// gear is toggled on or off. In combat, drinking takes a turn.
+	/// Uses or equips the `index`th item in the bag. A potion is used up
+	/// (kept at full HP); gear is toggled on or off. In combat, drinking
+	/// takes a turn.
 	pub(super) fn use_item(&mut self, index: usize) {
 		let Some(&kind) = self.hero.bag.get(index) else { return };
 		match kind {
+			ItemKind::Potion if self.hero.hp >= PLAYER_HP => self.say("You're already at full health."),
 			ItemKind::Potion => {
 				self.hero.bag.remove(index);
 				self.hero.hp = (self.hero.hp + POTION_HEAL).min(PLAYER_HP);

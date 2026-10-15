@@ -44,7 +44,6 @@ mod world;
 mod tests;
 
 use bevy::ecs::resource::Resource;
-use glam::Vec3;
 
 use crate::engine::font::GlyphSheet;
 use crate::engine::icons::IconSheet;
@@ -211,52 +210,75 @@ impl Game {
 		self.arrive(arrival)
 	}
 
-	/// After a move: changes level on stairs, and ends the run on death.
+	/// Ends the run if the hero has died: back to the main menu, which says
+	/// how it ended. True if it did.
+	fn check_death(&mut self) -> bool {
+		let hero = &self.levels[self.depth].hero;
+		if hero.hp > 0 {
+			return false;
+		}
+		self.notice = Some(format!("You died on depth {} with {} gold.", self.depth + 1, hero.gold));
+		self.screen = menu::Screen::MainMenu { selected: 0 };
+		true
+	}
+
+	/// After a move: ends the run on death, and changes level on stairs.
 	fn arrive(&mut self, arrival: Option<Arrival>) -> Result<(), String> {
-		if self.levels[self.depth].hero.hp <= 0 {
-			self.screen = menu::Screen::MainMenu { selected: 0 };
+		if self.check_death() {
 			return Ok(());
 		}
-		// The hero goes along to whichever level the player ends up on
-		let hero = std::mem::take(&mut self.levels[self.depth].hero);
-		match arrival {
-			Some(Arrival::StairsDown) => {
-				self.depth += 1;
-				if self.depth == self.levels.len() {
-					let level = self.make_level(self.depth)?;
-					self.levels.push(level);
-				} else {
-					// Back on a level you've been to: arrive on its up staircase
-					let level = &mut self.levels[self.depth];
-					let up = level.stairs_up.expect("levels below the top have an up staircase");
-					level.place_player(up);
-				}
-			}
-			Some(Arrival::StairsUp) => {
-				self.depth -= 1;
-				let level = &mut self.levels[self.depth];
-				let down = level.stairs_down;
-				level.place_player(down);
-			}
-			Some(Arrival::Floor) | None => {}
+		let (depth, going) = match arrival {
+			Some(Arrival::StairsDown) => (self.depth + 1, "You descend"),
+			Some(Arrival::StairsUp) if self.depth > 0 => (self.depth - 1, "You climb back up"),
+			_ => return Ok(()),
+		};
+		if depth == self.levels.len() {
+			// Made before anything moves, so a level that can't be built
+			// leaves the game as it was
+			let level = self.make_level(depth)?;
+			self.levels.push(level);
+		} else {
+			// Back on a level you've been to: arrive by the staircase you took
+			let level = &mut self.levels[depth];
+			let at = if depth > self.depth {
+				level.stairs_up.expect("levels below the top have an up staircase")
+			} else {
+				level.stairs_down
+			};
+			level.place_player(at);
 		}
-		self.levels[self.depth].hero = hero;
+		// The hero and the log go along; what was happening on the level left
+		// behind is over
+		let left = &mut self.levels[self.depth];
+		let hero = std::mem::take(&mut left.hero);
+		let log = std::mem::take(&mut left.log);
+		left.events.clear();
+		self.depth = depth;
+		let level = &mut self.levels[depth];
+		level.hero = hero;
+		level.log = log;
+		level.say(format!("{going} to depth {}.", depth + 1));
+		// Monsters waiting by the stairs start a fight straight away
+		level.update_combat();
 		Ok(())
 	}
 
-	/// Draws the HUD into a `cols` x `rows` character grid. The 3D view itself
-	/// is rendered by Bevy and turned into text by the filter shader.
-	/// Draws the HUD. While the level editor is open (`editing`) the map and
-	/// status stay out of its way.
+	/// Draws the HUD into a `cols` x `rows` character grid; the 3D view itself
+	/// is rendered by Bevy and turned into text by the filter shader. While the
+	/// level editor is open (`editing`) all of it stays out of the way.
 	fn render(&mut self, cols: usize, rows: usize, editing: bool) {
 		// Reallocate only when the window is resized
 		if cols != self.framebuffer.width || rows != self.framebuffer.height {
 			self.framebuffer = Framebuffer::new(cols, rows);
 		}
 		self.framebuffer.clear();
-		// Menus opened from the main menu cover the whole screen anyway
-		let in_game = matches!(self.screen, menu::Screen::Playing | menu::Screen::Paused { .. } | menu::Screen::Inventory { .. });
-		if in_game && !editing {
+		if editing {
+			return;
+		}
+		// The game shows behind the pause menu and the menus it opens; menus
+		// opened from the main menu cover the whole screen anyway
+		let in_game = matches!(self.screen, menu::Screen::Playing | menu::Screen::Inventory { .. }) || self.screen.paused();
+		if in_game {
 			let world = &self.levels[self.depth];
 			let reveal_all = !self.fog;
 			minimap::draw_status(world, &mut self.framebuffer);
@@ -267,8 +289,16 @@ impl Game {
 			}
 		}
 		menu::draw(self.screen, &self.settings, &mut self.framebuffer);
-		if let menu::Screen::Inventory { selected } = self.screen {
-			menu::draw_inventory(&self.levels[self.depth].hero, selected, &mut self.framebuffer);
+		match self.screen {
+			menu::Screen::Inventory { selected } => {
+				menu::draw_inventory(&self.levels[self.depth].hero, selected, &mut self.framebuffer);
+			}
+			menu::Screen::MainMenu { .. } => {
+				if let Some(notice) = &self.notice {
+					menu::draw_notice(notice, &mut self.framebuffer);
+				}
+			}
+			_ => {}
 		}
 	}
 }

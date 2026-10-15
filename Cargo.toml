@@ -1,0 +1,42 @@
+[package]
+name = "rpg_game"
+version = "0.3.7"
+edition = "2024"
+
+[dependencies]
+bevy = { version = "0.20.0", default-features = false, features = ["std", "multi_threaded", "async_executor", "bevy_asset", "bevy_winit", "bevy_window", "bevy_render", "bevy_core_pipeline", "bevy_camera", "bevy_image", "bevy_sprite", "bevy_sprite_render", "bevy_color", "bevy_pbr", "bevy_log", "png", "x11"] }
+crossterm = "0.29.0"
+glam = "0.34.1"
+# Extensions are listed so files that require them still load; the renderer
+# only reads geometry and colors
+gltf = { version = "1.4.1", default-features = false, features = [
+	"utils",
+	"KHR_lights_punctual",
+	"KHR_materials_emissive_strength",
+	"KHR_materials_ior",
+	"KHR_materials_pbrSpecularGlossiness",
+	"KHR_materials_specular",
+	"KHR_materials_transmission",
+	"KHR_materials_unlit",
+	"KHR_materials_variants",
+	"KHR_materials_volume",
+	"KHR_texture_transform",
+] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+rand = "0.10.3"
+tobj = "4.0.5"
+
+[[bin]]
+name = "base"
+path = "src\\base.rs"
+
+[[bin]]
+name = "debug"
+path = "src\\debug.rs"
+
+# Dependencies (Bevy above all) carry so much debug info that the Windows
+# linker's .pdb hits its size limit (LNK1318). Our own code keeps full debug
+# info; dependencies are also optimized so debug builds run at a playable speed.
+[profile.dev.package."*"]
+debug = false
+opt-level = 2

@@ -294,6 +294,7 @@ fn chest_transform(world: &super::world::World, chest: &super::chests::Chest) ->
 }
 
 /// Respawns the 3D models whenever the player changes level.
+#[allow(clippy::too_many_arguments)]
 fn sync_scene(
 	mut commands: Commands,
 	game: Res<Game>,
@@ -302,6 +303,7 @@ fn sync_scene(
 	mut materials: ResMut<Assets<StandardMaterial>>,
 	mut images: ResMut<Assets<Image>>,
 	mut cache: ResMut<SpriteCache>,
+	particles: Query<Entity, With<effects::Particle>>,
 ) {
 	if scene.shown == Some((game.run, game.depth)) {
 		return;
@@ -311,6 +313,10 @@ fn sync_scene(
 		if let Ok(mut e) = commands.get_entity(entity) {
 			e.despawn();
 		}
+	}
+	// Sparks and dust from the level left behind
+	for entity in &particles {
+		commands.entity(entity).despawn();
 	}
 	scene.shown = Some((game.run, game.depth));
 
@@ -531,9 +537,7 @@ fn handle_input(
 			game.screen = Screen::Playing;
 		}
 		// A potion drunk in combat can be the last thing the player does
-		if game.levels[game.depth].hero.hp <= 0 {
-			game.screen = Screen::MainMenu { selected: 0 };
-		}
+		game.check_death();
 	} else if game.screen != Screen::Playing {
 		match game.screen.handle(&mut game.settings, &keys) {
 			Some(Request::NewGame) => {

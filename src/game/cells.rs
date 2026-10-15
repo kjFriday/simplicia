@@ -122,6 +122,9 @@ pub(super) fn load_all() -> Vec<Cell> {
 		let Ok(entries) = parse(&text) else { continue };
 		let objects = entries
 			.into_iter()
+			// A model that's no longer in models/ is left out, rather than
+			// failing every level the cell turns up in
+			.filter(|(model, ..)| crate::engine::models::get(model).is_some())
 			.map(|(model, pos, yaw_degrees)| CellObject {
 				light: model.starts_with("Lights/"),
 				model,

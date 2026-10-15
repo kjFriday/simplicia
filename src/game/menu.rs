@@ -197,9 +197,16 @@ impl Screen {
 		}
 	}
 
-	/// Whether the options were opened from the pause menu.
-	fn paused(&self) -> bool {
-		matches!(self, Screen::Paused { .. } | Screen::Options { paused: true, .. } | Screen::Help { paused: true })
+	/// Whether this is the pause menu, or a menu opened from it.
+	pub(super) fn paused(&self) -> bool {
+		matches!(
+			self,
+			Screen::Paused { .. }
+				| Screen::Options { paused: true, .. }
+				| Screen::TextOptions { paused: true, .. }
+				| Screen::KeyBinds { paused: true, .. }
+				| Screen::Help { paused: true }
+		)
 	}
 
 	/// Handles one frame of keyboard input while a menu is open.
@@ -317,6 +324,7 @@ const TEXT: [u8; 3] = [200, 200, 200];
 const HIGHLIGHT: [u8; 3] = [255, 220, 90];
 const BORDER: [u8; 3] = [110, 110, 120];
 const HINT: [u8; 3] = [110, 110, 110];
+const NOTICE: [u8; 3] = [255, 120, 90];
 
 /// Draws the open menu, if any, over the HUD. Menus opened from the main menu
 /// cover the whole screen; the pause menu and its options are a box in the
@@ -346,7 +354,7 @@ pub(super) fn draw(screen: Screen, settings: &Settings, buffer: &mut Framebuffer
 		_ => "Enter select  Esc back",
 	};
 
-	let (box_w, box_h) = if screen.paused() || matches!(screen, Screen::Paused { .. }) {
+	let (box_w, box_h) = if screen.paused() {
 		let widest = lines.iter().chain([&title.to_string(), &hint.to_string()]).map(|l| l.chars().count()).max();
 		(widest.unwrap_or(0) as i32 + 8, lines.len() as i32 + 8)
 	} else {
@@ -389,6 +397,12 @@ pub(super) fn draw(screen: Screen, settings: &Settings, buffer: &mut Framebuffer
 		put_str(buffer, center(&text), top + i as i32, &text, rgb);
 	}
 	put_str(buffer, center(hint), top + lines.len() as i32 + 1, hint, HINT);
+}
+
+/// A line near the bottom of the main menu, like how the last run ended.
+pub(super) fn draw_notice(text: &str, buffer: &mut Framebuffer) {
+	let (w, h) = (buffer.width as i32, buffer.height as i32);
+	put_str(buffer, (w - text.chars().count() as i32) / 2, h - 3, text, NOTICE);
 }
 
 /// The Generator screen: the sliders down the left, and on the right the
@@ -588,5 +602,10 @@ mod tests {
 		assert!(!fb.color_buffer[0].ui);
 		let text: String = fb.color_buffer.iter().map(|c| c.ch).collect();
 		assert!(text.contains("> Main Menu <") && text.contains("PAUSED"));
+
+		// The menus the pause menu opens are boxes over the game too
+		let mut fb = Framebuffer::new(80, 30);
+		draw(Screen::TextOptions { selected: 0, paused: true }, &settings, &mut fb);
+		assert!(!fb.color_buffer[0].ui);
 	}
 }

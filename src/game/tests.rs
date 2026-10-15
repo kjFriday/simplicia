@@ -117,7 +117,7 @@ fn combat_snaps_to_tiles_and_bumping_an_enemy_attacks_it() {
 		world.player.facing = facing;
 		world.act(Action::Forward);
 	}
-	assert!(world.enemies.is_empty(), "the slime should be dead");
+	assert!(world.enemies.is_empty(), "the imp should be dead");
 	assert!(world.hero.hp < PLAYER_HP, "it should have hit back");
 	assert!(!world.combat);
 }
@@ -170,13 +170,14 @@ fn minimap_draws_in_the_top_right_and_reveals_only_nearby_tiles() {
 	assert!(fb.color_buffer.iter().enumerate().all(|(i, c)| i % 120 >= 60 || c.ch == ' '));
 }
 
-/// A level with no monsters or items, the player facing open floor for at
-/// least `reach` tiles; returns the direction faced.
+/// A level with no monsters, items, or chests, the player facing open floor
+/// for at least `reach` tiles; returns the direction faced.
 fn open_corridor(seed: u64, reach: i32) -> (World, (i32, i32)) {
 	for s in seed.. {
 		let mut world = World::generate(&mut StdRng::seed_from_u64(s), 0).unwrap();
 		world.enemies.clear();
 		world.items.clear();
+		world.chests.clear();
 		for f in 0..4 {
 			let (dx, dy) = DIRECTIONS[f];
 			let (px, py) = (world.player.x, world.player.y);

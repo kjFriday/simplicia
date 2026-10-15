@@ -1,14 +1,2 @@
-Cargo.toml
-/target/flycheck0
-/target/debug
 /target
-/target
-/target/flycheck0
-/target
-/target/debug
 *.bin
-target/.rustc_info.json
-Cargo.lock
-/target
-/target/debug
-/target/debug/.fingerprint
