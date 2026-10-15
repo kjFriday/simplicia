@@ -11,6 +11,7 @@ use super::combat::*;
 use super::items::*;
 use super::player::*;
 use super::world::*;
+use crate::engine::font::{glyph, picture};
 use crate::engine::hud::Framebuffer;
 use crate::game::ui::minimap;
 
@@ -53,6 +54,16 @@ fn mouselook_turns_facing_past_45_degrees_and_clamps_pitch() {
 	assert_eq!(player.facing(), 0);
 	player.look(0.0, 10.0);
 	assert_eq!(player.look_pitch, MAX_PITCH);
+}
+
+#[test]
+fn crouching_lowers_the_eye_and_standing_raises_it() {
+	let mut player = Player::new(0, 0, 0);
+	let standing = player.eye().y;
+	player.crouch_toward(true, 1.0);
+	assert!((standing - player.eye().y - CROUCH_EYE_DROP).abs() < 1e-4);
+	player.crouch_toward(false, 1.0);
+	assert_eq!(player.eye().y, standing);
 }
 
 /// Stands the player on a floor tile next to `target`, facing it.
@@ -167,8 +178,9 @@ fn minimap_draws_in_the_top_right_and_reveals_only_nearby_tiles() {
 	let mut fb = Framebuffer::new(120, 40);
 	minimap::draw(&world, &mut fb, false, false);
 	let row0: String = fb.color_buffer[..120].iter().map(|c| c.ch).collect();
-	assert!(row0.ends_with('┐') && row0.contains("Depth 1"), "{row0}");
-	let arrow = ['▲', '►', '▼', '◄'][world.player.facing];
+	assert!(row0.ends_with(picture(0xA5)) && row0.contains("Depth 1"), "{row0}");
+	let arrow = [glyph::TRIANGLE_UP, glyph::TRIANGLE_RIGHT, glyph::TRIANGLE_DOWN, glyph::TRIANGLE_LEFT]
+		[world.player.facing];
 	assert!(fb.color_buffer.iter().any(|c| c.ch == arrow));
 	// Nothing drawn in the left half
 	assert!(fb.color_buffer.iter().enumerate().all(|(i, c)| i % 120 >= 60 || c.ch == ' '));

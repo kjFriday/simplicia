@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use crate::game::editor::Editor;
-use crate::game::play::player::{Action, SPRINT_MULTIPLIER};
+use crate::game::play::player::{Action, CROUCH_MULTIPLIER, SPRINT_MULTIPLIER};
 use crate::game::ui::controls::{self, Bind};
 use crate::game::ui::screen::{Request, Screen};
 use crate::game::Game;
@@ -164,6 +164,9 @@ fn playing_keys(
 fn play_turn(keys: &ButtonInput<KeyCode>, game: &mut Game, exit: &mut MessageWriter<AppExit>, dt: f32) {
 	// The bound key, plus the arrows, which always work
 	let key = |bind| game.settings.key(bind);
+	// Every frame, so the view comes back up when standing still or in combat
+	let crouching = keys.pressed(key(Bind::Crouch));
+	game.levels[game.depth].player.crouch_toward(crouching, dt);
 	if !game.levels[game.depth].combat {
 		let held = |bind: Bind| {
 			if keys.any_pressed([Some(key(bind)), bind.arrow()].into_iter().flatten()) { 1.0 } else { 0.0 }
@@ -171,8 +174,14 @@ fn play_turn(keys: &ButtonInput<KeyCode>, game: &mut Game, exit: &mut MessageWri
 		let forward = held(Bind::Forward) - held(Bind::Back);
 		let strafe = held(Bind::TurnRight) - held(Bind::TurnLeft);
 		if forward != 0.0 || strafe != 0.0 {
-			let sprinting = keys.pressed(key(Bind::Sprint));
-			let dt = if sprinting { dt * SPRINT_MULTIPLIER } else { dt };
+			let sprinting = !crouching && keys.pressed(key(Bind::Sprint));
+			let dt = if crouching {
+				dt * CROUCH_MULTIPLIER
+			} else if sprinting {
+				dt * SPRINT_MULTIPLIER
+			} else {
+				dt
+			};
 			if let Err(e) = game.walk(forward, strafe, dt) {
 				eprintln!("error: {e}");
 				exit.write(AppExit::error());

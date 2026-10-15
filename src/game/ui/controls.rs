@@ -19,6 +19,8 @@ pub(crate) enum Bind {
 	TurnRight,
 	/// Hold to walk faster (outside combat)
 	Sprint,
+	/// Hold to duck down and walk slower
+	Crouch,
 	Pause,
 	Map,
 	Inventory,
@@ -29,12 +31,13 @@ pub(crate) enum Bind {
 impl Bind {
 	// Keys are stored in ALL's order and looked up by `bind as usize`, so
 	// ALL must list the variants in declaration order (see the test below)
-	pub(crate) const ALL: [Bind; 9] = [
+	pub(crate) const ALL: [Bind; 10] = [
 		Bind::Forward,
 		Bind::Back,
 		Bind::TurnLeft,
 		Bind::TurnRight,
 		Bind::Sprint,
+		Bind::Crouch,
 		Bind::Pause,
 		Bind::Map,
 		Bind::Inventory,
@@ -52,6 +55,7 @@ impl Bind {
 			Bind::Inventory => "Inventory",
 			Bind::Attack => "Attack",
 			Bind::Sprint => "Sprint",
+			Bind::Crouch => "Crouch",
 		}
 	}
 
@@ -66,6 +70,7 @@ impl Bind {
 			Bind::Inventory => KeyCode::KeyE,
 			Bind::Attack => KeyCode::KeyF,
 			Bind::Sprint => KeyCode::ShiftLeft,
+			Bind::Crouch => KeyCode::ControlLeft,
 		}
 	}
 
@@ -168,6 +173,7 @@ pub(crate) fn help(key: impl Fn(Bind) -> KeyCode) -> Vec<HelpLine> {
 		Control(format!("{} {}", bound(Bind::Forward), bound(Bind::Back)), "walk forward / back"),
 		Control(format!("{} {}", bound(Bind::TurnLeft), bound(Bind::TurnRight)), "step sideways"),
 		Control(key_name(key(Bind::Sprint)), "hold to sprint"),
+		Control(key_name(key(Bind::Crouch)), "hold to crouch"),
 		Control("Mouse".into(), "look around"),
 		Control(format!("Click / {}", key_name(key(Bind::Attack))), "swing: hits what's in front, opens chests"),
 		Control(key_name(key(Bind::Map)), "map: mini / full / off"),

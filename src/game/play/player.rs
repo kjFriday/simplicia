@@ -17,6 +17,12 @@ pub(crate) const MAX_PITCH: f32 = 80.0 * std::f32::consts::PI / 180.0;
 pub(crate) const WALK_SPEED: f32 = 5.0;
 /// Holding Sprint multiplies the walking speed by this.
 pub(crate) const SPRINT_MULTIPLIER: f32 = 1.5;
+/// Holding Crouch multiplies the walking speed by this (and overrides Sprint).
+pub(crate) const CROUCH_MULTIPLIER: f32 = 0.5;
+/// How far the eye drops when fully crouched, in meters.
+pub(crate) const CROUCH_EYE_DROP: f32 = 0.8;
+/// How fast crouching eases in and out: the whole way takes 1/this seconds.
+const CROUCH_RATE: f32 = 8.0;
 /// How close the player's center can get to a wall, in meters.
 pub(crate) const PLAYER_RADIUS: f32 = 0.6;
 
@@ -45,11 +51,20 @@ pub(crate) struct Player {
 	/// tile (x, y); walking freely it can be anywhere, and (x, y) is the tile
 	/// it's in.
 	pub(crate) pos: Vec3,
+	/// 0 standing, 1 fully crouched; eases between them
+	pub(crate) crouch: f32,
 }
 
 impl Player {
 	pub(crate) fn new(x: i32, y: i32, z: i32) -> Self {
-		Self { x, y, z, facing: 0, look_yaw: 0.0, look_pitch: 0.0, pos: tile_center(x, y) }
+		Self { x, y, z, facing: 0, look_yaw: 0.0, look_pitch: 0.0, pos: tile_center(x, y), crouch: 0.0 }
+	}
+
+	/// Eases down toward a full crouch while `held`, back up otherwise.
+	pub(crate) fn crouch_toward(&mut self, held: bool, dt: f32) {
+		let target = if held { 1.0 } else { 0.0 };
+		let step = CROUCH_RATE * dt;
+		self.crouch = if self.crouch < target { (self.crouch + step).min(target) } else { (self.crouch - step).max(target) };
 	}
 
 	/// Where the player looks, flat on the floor: the facing turned by mouselook.
@@ -138,9 +153,9 @@ impl Player {
 		DIRECTIONS[self.facing]
 	}
 
-	/// Where the eye is, in world space.
+	/// Where the eye is, in world space; lower when crouching.
 	pub(crate) fn eye(&self) -> Vec3 {
-		self.pos + Vec3::new(0.0, EYE_HEIGHT, 0.0)
+		self.pos + Vec3::new(0.0, EYE_HEIGHT - CROUCH_EYE_DROP * self.crouch, 0.0)
 	}
 
 	/// The camera transform for looking out of the player's eyes.
